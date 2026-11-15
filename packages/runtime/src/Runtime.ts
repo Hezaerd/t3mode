@@ -3,6 +3,7 @@
 import type { Info, NativeBridge } from "@t3mode/shared/Ipc";
 import type { PluginSettings, Settings } from "@t3mode/shared/Settings";
 import type { ShortcutAction, ShortcutStatus } from "@t3mode/shared/Shortcut";
+import type { UpdateAction, UpdateStatus } from "@t3mode/shared/Updates";
 
 import type { OptionsSpec, Plugin, PluginApi, PluginReport } from "./types.ts";
 import { toast } from "./ui/toast.ts";
@@ -39,7 +40,9 @@ export class Runtime {
   readonly #cleanups = new Map<string, Array<() => void>>();
   readonly #states = new Map<string, PluginState>();
   readonly #listeners = new Set<() => void>();
+  readonly #updateListeners = new Set<(status: UpdateStatus) => void>();
   #settings: Settings;
+  #update: UpdateStatus | undefined;
   readonly info: Info;
 
   constructor(
@@ -111,6 +114,39 @@ export class Runtime {
     }
   }
 
+  /** The last T3 Code update status from main, once `watchUpdates` has run. */
+  get updateStatus(): UpdateStatus | undefined {
+    return this.#update;
+  }
+
+  /** Follows T3 Code updates: main pushes every change once the page asked for the status. */
+  watchUpdates(): void {
+    this.#native.onUpdate((status) => this.#setUpdate(status));
+    void this.update("status");
+  }
+
+  async update(action: UpdateAction): Promise<UpdateStatus | undefined> {
+    try {
+      const status = await this.#native.update(action);
+      this.#setUpdate(status);
+      return status;
+    } catch (error) {
+      this.log("warn", `Update ${action} failed: ${describe(error)}`);
+      return undefined;
+    }
+  }
+
+  onUpdate(listener: (status: UpdateStatus) => void): () => void {
+    this.#updateListeners.add(listener);
+    return () => this.#updateListeners.delete(listener);
+  }
+
+  /** Whether T3 Mode installs T3 Code's updates. Applies at the next launch. */
+  async setManageUpdates(manage: boolean): Promise<void> {
+    await this.#write({ ...this.#settings, updates: { ...this.#settings.updates, manage } });
+    await this.update("status");
+  }
+
   async openLogs(): Promise<void> {
     try {
       await this.#native.openLogs();
@@ -139,12 +175,36 @@ export class Runtime {
     this.#emit();
   }
 
+  #setUpdate(status: UpdateStatus): void {
+    const previous = this.#update;
+    this.#update = status;
+    const { phase } = status;
+    const newlyReady =
+      phase.kind === "ready" &&
+      previous !== undefined &&
+      !(previous.phase.kind === "ready" && previous.phase.version === phase.version);
+    if (newlyReady && status.installable) {
+      toast(`T3 Code ${phase.version} is ready. It installs when you quit T3 Code.`, "info");
+    }
+    for (const listener of this.#updateListeners) {
+      try {
+        listener(status);
+      } catch (error) {
+        this.log("error", `Update listener failed: ${describe(error)}`);
+      }
+    }
+  }
+
   async #save(id: string, patch: PluginSettings): Promise<void> {
     const current = this.#settings.plugins[id] ?? {};
-    this.#settings = {
+    await this.#write({
       ...this.#settings,
       plugins: { ...this.#settings.plugins, [id]: { ...current, ...patch } },
-    };
+    });
+  }
+
+  async #write(next: Settings): Promise<void> {
+    this.#settings = next;
     this.#emit();
     try {
       await this.#native.writeSettings(this.#settings);

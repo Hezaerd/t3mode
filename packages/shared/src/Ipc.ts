@@ -1,6 +1,7 @@
 // The contract between the preload and the main process.
 import type { Settings } from "./Settings.ts";
 import type { ShortcutAction, ShortcutStatus } from "./Shortcut.ts";
+import type { UpdateAction, UpdateStatus } from "./Updates.ts";
 
 export const Channel = {
   /** Preload → main: the source of renderer.js, re-read from disk on every call. */
@@ -19,6 +20,10 @@ export const Channel = {
   openLogs: "t3mode:open-logs",
   /** Page → main: T3 Mode's shortcut in T3 Code's keybindings.json (see Shortcut.ts). */
   shortcut: "t3mode:shortcut",
+  /** Page → main: update status, a check now, or restart to install (see Updates.ts). */
+  update: "t3mode:update",
+  /** Main → page: the update status changed. Sent to pages that asked for the status. */
+  updateChanged: "t3mode:update-changed",
 } as const;
 
 /** T3 Code's main window. Dev builds use schemes like `t3code-dev`. */
@@ -45,4 +50,7 @@ export interface NativeBridge {
   readonly writeSettings: (settings: Settings) => Promise<void>;
   readonly openLogs: () => Promise<void>;
   readonly shortcut: (action: ShortcutAction) => Promise<ShortcutStatus>;
+  readonly update: (action: UpdateAction) => Promise<UpdateStatus>;
+  /** Calls `listener` with each new update status. */
+  readonly onUpdate: (listener: (status: UpdateStatus) => void) => void;
 }

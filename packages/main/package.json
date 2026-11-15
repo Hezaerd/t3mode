@@ -8,6 +8,7 @@
     "typecheck": "effect-tsgo tsc --noEmit -p ."
   },
   "devDependencies": {
+    "@effect/platform-node": "catalog:",
     "@t3mode/shared": "workspace:*",
     "@types/node": "catalog:",
     "effect": "catalog:",

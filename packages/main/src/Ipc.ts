@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { app, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
+import { app, ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from "electron";
 
 import { Channel, type Info, isMainWindowUrl } from "@t3mode/shared/Ipc";
 import { T3MODE_VERSION } from "@t3mode/shared/Version";
@@ -13,6 +13,9 @@ import { Files } from "./Files.ts";
 import { Home } from "./Home.ts";
 import { SettingsStore } from "./SettingsStore.ts";
 import { ShortcutActionSchema, T3Keybindings } from "./T3Keybindings.ts";
+import { Updater } from "./Updater.ts";
+
+const UpdateActionSchema = Schema.Literals(["status", "check", "restart"]);
 
 export class IpcRefusedError extends Schema.TaggedError<IpcRefusedError>()("IpcRefusedError", {
   channel: Schema.String,
@@ -71,17 +74,29 @@ export const register = Effect.fn("Ipc.register")(function* (options: {
   const guard = yield* BootGuard;
   const settings = yield* SettingsStore;
   const keybindings = yield* T3Keybindings;
+  const updater = yield* Updater;
+  // Pages that asked for the update status get every change pushed to them.
+  const subscribed = new WeakSet<WebContents>();
+  const subscribe = (sender: WebContents) =>
+    subscribed.has(sender)
+      ? Effect.void
+      : Effect.andThen(
+          Effect.sync(() => subscribed.add(sender)),
+          updater.subscribe((status) => {
+            if (!sender.isDestroyed()) sender.send(Channel.updateChanged, status);
+          }),
+        );
   const { layout } = yield* Home;
   const run = Effect.runPromiseWith(yield* Effect.context<never>());
 
   const handle = <A, E>(
     channel: string,
-    handler: (args: ReadonlyArray<unknown>) => Effect.Effect<A, E>,
+    handler: (args: ReadonlyArray<unknown>, event: IpcMainInvokeEvent) => Effect.Effect<A, E>,
   ) =>
     ipcMain.handle(channel, (event, ...args) =>
       run(
         checkSender(channel, event).pipe(
-          Effect.andThen(handler(args)),
+          Effect.andThen(handler(args, event)),
           Effect.tapError((error) => Effect.logWarning(`IPC ${channel} failed`, error)),
           Effect.annotateLogs({ channel }),
         ),
@@ -108,6 +123,18 @@ export const register = Effect.fn("Ipc.register")(function* (options: {
     handle(Channel.shortcut, (args) =>
       Schema.decodeUnknownEffect(ShortcutActionSchema)(args[0]).pipe(
         Effect.flatMap(keybindings.shortcut),
+      ),
+    );
+    handle(Channel.update, (args, event) =>
+      Schema.decodeUnknownEffect(UpdateActionSchema)(args[0]).pipe(
+        Effect.tap(() => subscribe(event.sender)),
+        Effect.flatMap((action) =>
+          action === "check"
+            ? updater.check
+            : action === "restart"
+              ? updater.restart
+              : updater.status,
+        ),
       ),
     );
     handle(Channel.info, () =>

@@ -12,6 +12,7 @@ import {
 } from "@t3mode/shared/Ipc";
 import type { Settings } from "@t3mode/shared/Settings";
 import type { ShortcutAction, ShortcutStatus } from "@t3mode/shared/Shortcut";
+import type { UpdateAction, UpdateStatus } from "@t3mode/shared/Updates";
 
 const GUARD = "__t3modePreloaded";
 
@@ -29,6 +30,11 @@ const start = (): void => {
     openLogs: () => ipcRenderer.invoke(Channel.openLogs),
     shortcut: (action: ShortcutAction) =>
       ipcRenderer.invoke(Channel.shortcut, action) as Promise<ShortcutStatus>,
+    update: (action: UpdateAction) =>
+      ipcRenderer.invoke(Channel.update, action) as Promise<UpdateStatus>,
+    onUpdate: (listener: (status: UpdateStatus) => void) => {
+      ipcRenderer.on(Channel.updateChanged, (_event, status: UpdateStatus) => listener(status));
+    },
   };
   contextBridge.exposeInMainWorld("t3modeNative", bridge);
 

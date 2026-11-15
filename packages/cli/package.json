@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "vp pack",
     "typecheck": "effect-tsgo tsc --noEmit -p ."
   },
   "dependencies": {

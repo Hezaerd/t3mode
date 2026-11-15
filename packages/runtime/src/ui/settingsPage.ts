@@ -1,5 +1,5 @@
 // T3 Mode's pages inside T3 Code's settings. A "T3 Mode" group in the settings navigation holds
-// two entries, like Vencord's: "T3 Mode" (version, shortcut, logs, troubleshooting) and
+// two entries, like Vencord's: "T3 Mode" (version, updates, shortcut, troubleshooting) and
 // "Plugins" (a card grid with search and filter, and a page per plugin for its options). Pages
 // open in the settings content pane, built from T3 Code's own components (see native.ts).
 //
@@ -21,6 +21,7 @@ import {
 } from "./native.ts";
 import { ensureStyles } from "./styles.ts";
 import { toast } from "./toast.ts";
+import { updatesSection } from "./updatesSection.ts";
 
 const NAV_ATTRIBUTE = "data-t3mode-nav";
 const NAV_GROUP_ATTRIBUTE = "data-t3mode-nav-group";
@@ -416,6 +417,7 @@ export class SettingsPage {
     });
     body.append(
       section(NAME, null, about),
+      updatesSection(runtime),
       section(
         "Troubleshooting",
         null,
