@@ -54,9 +54,19 @@ export interface PluginUi {
   readonly button: (options: ButtonOptions) => HTMLButtonElement;
 }
 
+export interface LocalSocket {
+  readonly name: string;
+  write(data: Uint8Array): void;
+  close(): void;
+  onData(callback: (data: Uint8Array) => void): void;
+  onClose(callback: (error?: string) => void): void;
+}
+
 export interface PluginApi<O extends OptionsSpec = OptionsSpec> {
   /** The id from the plugin's manifest.json. */
   readonly id: string;
+  /** Connects to a local socket whose name must be declared in the manifest. */
+  readonly sockets: { readonly connect: (name: string) => Promise<LocalSocket> };
   readonly options: OptionValues<O>;
   /** Adds a stylesheet, removed when the plugin stops. */
   readonly css: (text: string) => void;
