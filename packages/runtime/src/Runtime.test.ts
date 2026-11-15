@@ -44,7 +44,7 @@ it("finishes writes from running plugins and cleanup before removing their data"
     ],
     { version: 1, plugins: {} },
     { t3modeVersion: "1", t3codeVersion: "1", home: "home", logs: "logs", safeMode: false },
-    { example: { saved: true } },
+    { data: { example: { saved: true } }, unreadable: [] },
   );
   runtime.startAll();
   const removal = runtime.remove("example");

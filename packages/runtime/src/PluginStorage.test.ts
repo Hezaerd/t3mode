@@ -3,6 +3,7 @@ import type { PluginData } from "@t3mode/shared/Plugins";
 import { pluginStorage } from "./PluginStorage.ts";
 
 const deferred = () => Promise.withResolvers<void>();
+const path = (id: string) => `home/plugin-data/${id}.json`;
 
 describe("pluginStorage", () => {
   it("coalesces calls during a write and persists the latest record", async () => {
@@ -11,7 +12,7 @@ describe("pluginStorage", () => {
       .fn<(id: string, record: PluginData) => Promise<void>>()
       .mockImplementationOnce(() => first.promise)
       .mockResolvedValue(undefined);
-    const manager = pluginStorage(new Map(), write, vi.fn());
+    const manager = pluginStorage(new Map(), [], path, write, vi.fn());
     const storage = manager.storage("example");
     storage.set("count", 0);
     for (let n = 1; n <= 100; n++) storage.set("count", n);
@@ -31,9 +32,13 @@ describe("pluginStorage", () => {
   });
   it("normalizes and isolates values and uses own keys for fallback", () => {
     const warn = vi.fn();
-    const storage = pluginStorage(new Map(), vi.fn().mockResolvedValue(undefined), warn).storage(
-      "example",
-    );
+    const storage = pluginStorage(
+      new Map(),
+      [],
+      path,
+      vi.fn().mockResolvedValue(undefined),
+      warn,
+    ).storage("example");
     expect(storage.get("constructor", "fallback")).toBe("fallback");
     const value = { list: [1], missing: undefined };
     storage.set("value", value);
@@ -56,7 +61,7 @@ describe("pluginStorage", () => {
       .fn<(id: string, record: PluginData) => Promise<void>>()
       .mockImplementationOnce(() => first.promise)
       .mockResolvedValue(undefined);
-    const storage = pluginStorage(new Map(), write, warn).storage("example");
+    const storage = pluginStorage(new Map(), [], path, write, warn).storage("example");
     storage.set("value", 1);
     storage.set("value", 2);
     first.reject(new Error("disk full"));
@@ -66,5 +71,27 @@ describe("pluginStorage", () => {
     expect(write.mock.calls[1]).toEqual(["example", { value: 2 }]);
     storage.set("value", 3);
     expect(write).toHaveBeenCalledTimes(3);
+  });
+  it("stores nothing for a plugin whose file is unreadable", () => {
+    const warn = vi.fn();
+    const write = vi.fn().mockResolvedValue(undefined);
+    const manager = pluginStorage(new Map(), ["broken"], path, write, warn);
+    const broken = manager.storage("broken");
+    expect(broken.readable).toBe(false);
+    expect(broken.path).toBe("home/plugin-data/broken.json");
+    broken.set("value", 1);
+    broken.set("value", 2);
+    expect(broken.get("value", 0)).toBe(0);
+    expect(write).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    const fine = manager.storage("fine");
+    expect(fine.readable).toBe(true);
+    fine.set("value", 1);
+    expect(write).toHaveBeenCalledWith("fine", { value: 1 });
+    manager.forget("broken");
+    const reinstalled = manager.storage("broken");
+    expect(reinstalled.readable).toBe(true);
+    reinstalled.set("value", 3);
+    expect(write).toHaveBeenCalledWith("broken", { value: 3 });
   });
 });

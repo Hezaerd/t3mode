@@ -100,9 +100,14 @@ export class Runtime {
     pluginData: PluginDataSnapshot,
   ) {
     this.#native = native;
-    for (const [id, data] of Object.entries(pluginData)) this.#data.set(id, { ...data });
-    this.#storage = pluginStorage(this.#data, native.writePluginData, (message) =>
-      this.log("warn", message),
+    for (const [id, data] of Object.entries(pluginData.data)) this.#data.set(id, { ...data });
+    const separator = info.home.includes("\\") ? "\\" : "/";
+    this.#storage = pluginStorage(
+      this.#data,
+      pluginData.unreadable,
+      (id) => [info.home, "plugin-data", `${id}.json`].join(separator),
+      native.writePluginData,
+      (message) => this.log("warn", message),
     );
     this.#settings = settings;
     this.info = info;
@@ -232,6 +237,7 @@ export class Runtime {
     const result = await this.#ask("Remove", () => this.#native.plugins.remove(id));
     if (result.ok) {
       this.#data.delete(id);
+      this.#storage.forget(id);
       this.#entries.delete(id);
       this.#registrations.delete(id);
       this.#states.delete(id);

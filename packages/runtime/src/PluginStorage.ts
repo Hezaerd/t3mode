@@ -3,9 +3,13 @@ import type { PluginData } from "@t3mode/shared/Plugins";
 
 export const pluginStorage = (
   data: Map<string, Record<string, unknown>>,
+  unreadable: Iterable<string>,
+  pathOf: (id: string) => string,
   write: (id: string, record: PluginData) => Promise<void>,
   warn: (message: string) => void,
 ) => {
+  const unreadableIds = new Set(unreadable);
+  const refused = new Set<string>();
   const pending = new Map<
     string,
     { latest: PluginData | undefined; done: PromiseWithResolvers<void> }
@@ -37,6 +41,8 @@ export const pluginStorage = (
     state.done.resolve();
   };
   const storage = (id: string): PluginApi["storage"] => ({
+    readable: !unreadableIds.has(id),
+    path: pathOf(id),
     get: (key, fallback) => {
       const record = data.get(id);
       return record && Object.hasOwn(record, key)
@@ -44,6 +50,13 @@ export const pluginStorage = (
         : fallback;
     },
     set: (key, value) => {
+      if (unreadableIds.has(id)) {
+        if (!refused.has(id)) {
+          refused.add(id);
+          warn(`Plugin ${id} data file is unreadable, so nothing is stored until it is fixed`);
+        }
+        return;
+      }
       try {
         const normalized: unknown = JSON.parse(JSON.stringify(value));
         const record = { ...data.get(id), [key]: normalized };
@@ -57,5 +70,10 @@ export const pluginStorage = (
   return {
     storage,
     flush: (id: string): Promise<void> => pending.get(id)?.done.promise ?? Promise.resolve(),
+    /** After the plugin's file is deleted, a new install starts with readable, empty storage. */
+    forget: (id: string): void => {
+      unreadableIds.delete(id);
+      refused.delete(id);
+    },
   };
 };

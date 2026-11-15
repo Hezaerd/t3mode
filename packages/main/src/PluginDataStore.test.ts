@@ -35,7 +35,7 @@ const run = <A, E>(
 
 describe("PluginDataStore", () => {
   it("reads an absent folder as empty without creating it", async () => {
-    expect(await run((store) => store.read)).toEqual({});
+    expect(await run((store) => store.read)).toEqual({ data: {}, unreadable: [] });
     expect(fs.existsSync(homeLayout(root).pluginData)).toBe(false);
   });
   it("round trips JSON records and replaces the previous record", () =>
@@ -44,7 +44,7 @@ describe("PluginDataStore", () => {
         const data = { text: "hello", nested: { list: [1, null, true] } };
         yield* store.write("example", { old: true });
         yield* store.write("example", data);
-        expect(yield* store.read).toEqual({ example: data });
+        expect(yield* store.read).toEqual({ data: { example: data }, unreadable: [] });
         expect(
           JSON.parse(
             fs.readFileSync(path.join(homeLayout(root).pluginData, "example.json"), "utf8"),
@@ -52,7 +52,7 @@ describe("PluginDataStore", () => {
         ).toEqual(data);
       }),
     ));
-  it("skips invalid and unreadable files while loading valid records", async () => {
+  it("names invalid and unreadable files while loading valid records", async () => {
     const folder = homeLayout(root).pluginData;
     fs.mkdirSync(folder);
     fs.writeFileSync(path.join(folder, "bad.json"), "{");
@@ -60,7 +60,9 @@ describe("PluginDataStore", () => {
     fs.writeFileSync(path.join(folder, "INVALID.json"), "{}");
     fs.mkdirSync(path.join(folder, "unreadable.json"));
     fs.writeFileSync(path.join(folder, "good.json"), '{"value":42}');
-    expect(await run((store) => store.read)).toEqual({ good: { value: 42 } });
+    const snapshot = await run((store) => store.read);
+    expect(snapshot.data).toEqual({ good: { value: 42 } });
+    expect(snapshot.unreadable.toSorted()).toEqual(["array", "bad", "unreadable"]);
   });
   it("refuses unsafe ids and non-record arguments", async () => {
     await Promise.all(

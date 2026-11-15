@@ -52,6 +52,13 @@ export interface PluginApi<O extends OptionsSpec = OptionsSpec> {
   readonly onCleanup: (cleanup: () => void) => void;
   /** JSON in <home>/plugin-data/<id>.json. Deleted when the plugin is removed or uninstall --purge runs. */
   readonly storage: {
+    /**
+     * False when the file exists but isn't a JSON object. `get` then returns each fallback and
+     * `set` stores nothing, so the file is never written over. A fix takes effect on reload.
+     */
+    readonly readable: boolean;
+    /** The file's absolute path, to show the user. */
+    readonly path: string;
     readonly get: <T>(key: string, fallback: T) => T;
     readonly set: (key: string, value: unknown) => void;
   };
