@@ -291,6 +291,8 @@ t3mode/
   - Installing `acme/example-plugin` from the Plugins page showed the prompt, downloaded both files through `net.fetch`, wrote `plugins.json` and started the plugin without a reload.
   - "Check for updates" found 1.1.0, and "Update to 1.1.0" swapped in the new code and removed the old code's stylesheet.
   - After a reload, the installed copy loaded from disk. After its `plugin.js` was edited, it was refused as changed since install.
+  - A plugin whose top level counts its runs counted 0 after a reload while it was off, and 1 once it was turned on.
+  - Requests to the stand-in carried Chromium's headers, so they go through `net.fetch`. The T3 Code update check still ran against the real feed.
   - Retry re-read a linked plugin that had been fixed on disk and started it. Remove deleted the files, the lockfile entry and everything the plugin added.
   - Against the real `https://github.com`, a repo whose release has no `manifest.json` and a missing repo both got a message, and main refused a local source sent from page code.
 - **Real install.** On the real T3 Code install, the helper ran T3 Code's own installer and put the shim back, and T3 Code started with t3mode loaded. `pnpm t3mode status` shows the helper's log after each update.
