@@ -1,5 +1,8 @@
-// What a plugin is, and what it can do through its API.
-import type { LogLevel } from "@t3mode/shared/Ipc";
+// The contract between t3mode and a plugin. A plugin's bundle default-exports
+// `definePlugin({ options, start })`; its id, name and version live in its manifest.json.
+// Changing anything here in a way that breaks plugins means a new PLUGIN_API_VERSION.
+
+export type LogLevel = "debug" | "info" | "warn" | "error";
 
 export interface BooleanOption {
   readonly type: "boolean";
@@ -30,6 +33,7 @@ export interface PluginReport {
 }
 
 export interface PluginApi<O extends OptionsSpec = OptionsSpec> {
+  /** The id from the plugin's manifest.json. */
   readonly id: string;
   readonly options: OptionValues<O>;
   /** Adds a stylesheet, removed when the plugin stops. */
@@ -53,18 +57,39 @@ export interface PluginApi<O extends OptionsSpec = OptionsSpec> {
   };
   readonly log: (level: LogLevel, message: string) => void;
   readonly report: (report: PluginReport) => void;
+  /** The first element matching any of the selectors, tried in order: newest markup first. */
+  readonly queryFirst: <E extends Element = HTMLElement>(
+    candidates: ReadonlyArray<string>,
+  ) => E | null;
+  /** The thread on screen as T3 Code keys it, `<environmentId>:<threadId>`, or null off a thread. */
+  readonly currentThreadKey: (hash?: string) => string | null;
+  /**
+   * T3 Code's React state, read from the fiber React attaches to DOM nodes. Component names are
+   * minified, so lookups match on the shape of the data, and return undefined when it changed.
+   */
+  readonly react: {
+    /** Props of the closest ancestor component (inclusive) whose props pass `test`. */
+    readonly findPropsUp: (
+      node: Element,
+      test: (props: Record<string, unknown>) => boolean,
+      maxDepth?: number,
+    ) => Record<string, unknown> | undefined;
+    /** The first hook state in the tree under the root of `node` that passes `test`. */
+    readonly findHookState: <T>(
+      node: Element,
+      test: (value: unknown) => value is T,
+      budget?: number,
+    ) => T | undefined;
+  };
 }
 
-export interface Plugin<O extends OptionsSpec = OptionsSpec> {
-  readonly id: string;
-  readonly name: string;
-  readonly description: string;
-  readonly enabledByDefault: boolean;
+export interface PluginDefinition<O extends OptionsSpec = OptionsSpec> {
   readonly options: O;
   /** Called on start and again after any option change (the plugin is restarted). */
-  readonly start: (api: PluginApi<O>) => void;
+  start(api: PluginApi<O>): void;
 }
 
-/** Keeps the option types of each plugin while storing plugins in one list. */
-export const definePlugin = <const O extends OptionsSpec>(plugin: Plugin<O>): Plugin =>
-  plugin as unknown as Plugin;
+/** Returns the definition unchanged, typing `api.options` from `options`. */
+export const definePlugin = <const O extends OptionsSpec>(
+  definition: PluginDefinition<O>,
+): PluginDefinition<O> => definition;

@@ -1,6 +1,7 @@
 // Sandboxed preload, registered on every session. Outside T3 Code's main window it does nothing.
-// In the main window it exposes `window.t3modeNative` and runs renderer.js in the page's own world,
-// where plugins can reach the DOM that React manages.
+// In the main window it exposes `window.t3modeNative` and runs the page scripts (each installed
+// plugin, then renderer.js) in the page's own world, where plugins can reach the DOM that React
+// manages.
 import { contextBridge, ipcRenderer, webFrame } from "electron";
 
 import {
@@ -8,13 +9,24 @@ import {
   type Info,
   type LogLevel,
   type NativeBridge,
+  type PluginAction,
   isMainWindowUrl,
 } from "@t3mode/shared/Ipc";
+import type { GithubSource, PageScript } from "@t3mode/shared/Plugins";
 import type { Settings } from "@t3mode/shared/Settings";
 import type { ShortcutAction, ShortcutStatus } from "@t3mode/shared/Shortcut";
 import type { UpdateAction, UpdateStatus } from "@t3mode/shared/Updates";
 
 const GUARD = "__t3modePreloaded";
+
+const describe = (error: unknown) =>
+  error instanceof Error ? (error.stack ?? error.message) : String(error);
+
+const runScript = async (script: PageScript): Promise<void> => {
+  await webFrame.executeJavaScript(`${script.code}\n//# sourceURL=${script.name}`);
+};
+
+const plugins = (action: PluginAction) => ipcRenderer.invoke(Channel.plugins, action);
 
 const start = (): void => {
   const scope = globalThis as unknown as Record<string, unknown>;
@@ -35,21 +47,37 @@ const start = (): void => {
     onUpdate: (listener: (status: UpdateStatus) => void) => {
       ipcRenderer.on(Channel.updateChanged, (_event, status: UpdateStatus) => listener(status));
     },
+    plugins: {
+      list: () => plugins({ _tag: "list" }),
+      preview: (input: string) => plugins({ _tag: "preview", input }),
+      install: (source: GithubSource, id: string) => plugins({ _tag: "install", source, id }),
+      update: (id: string) => plugins({ _tag: "update", id }),
+      remove: (id: string) => plugins({ _tag: "remove", id }),
+      checkUpdates: () => plugins({ _tag: "check" }),
+    },
+    loadPlugin: async (id: string) => {
+      const script = (await ipcRenderer.invoke(Channel.pluginScript, id)) as PageScript | null;
+      if (!script) throw new Error(`Plugin ${id} has no code that can be loaded.`);
+      await runScript(script);
+    },
   };
   contextBridge.exposeInMainWorld("t3modeNative", bridge);
+  const logError = (message: string) => bridge.log("error", message).catch(() => undefined);
 
-  ipcRenderer
-    .invoke(Channel.rendererSource)
-    .then((source: string) =>
-      source
-        ? webFrame.executeJavaScript(`${source}\n//# sourceURL=t3mode-renderer.js`)
-        : undefined,
-    )
-    .catch((error: unknown) =>
-      bridge.log(
-        "error",
-        `renderer.js failed: ${error instanceof Error ? error.stack : String(error)}`,
-      ),
+  const runEachInOrder = (scripts: ReadonlyArray<PageScript>) =>
+    scripts.reduce<Promise<unknown>>(
+      (previous, script) =>
+        previous.then(() =>
+          runScript(script).catch((error: unknown) =>
+            logError(`${script.name} failed: ${describe(error)}`),
+          ),
+        ),
+      Promise.resolve(),
+    );
+  void ipcRenderer
+    .invoke(Channel.pageScripts)
+    .then(runEachInOrder, (error: unknown) =>
+      logError(`Could not read the page scripts: ${describe(error)}`),
     );
 };
 

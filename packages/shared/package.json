@@ -10,6 +10,7 @@
     "typecheck": "effect-tsgo tsc --noEmit -p ."
   },
   "devDependencies": {
+    "@effect/platform-node": "catalog:",
     "@types/node": "catalog:",
     "effect": "catalog:"
   }

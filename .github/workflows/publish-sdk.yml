@@ -1,0 +1,54 @@
+# Publishes @t3mode/plugin-sdk when a push to main carries a version that npm doesn't have yet.
+# npm trusts this workflow by its filename (npm trusted publishing), so no token is stored here.
+# Pull requests that touch the SDK run everything up to a dry-run publish.
+name: Publish plugin SDK
+
+on:
+  push:
+    branches: [main]
+    paths: ["packages/plugin-sdk/**", ".github/workflows/publish-sdk.yml"]
+  pull_request:
+    paths: ["packages/plugin-sdk/**", ".github/workflows/publish-sdk.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-sdk-${{ github.ref }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - name: Use npm 11.5.1 or later, which trusted publishing needs
+        run: npm install --global npm@^11.5.1
+      - name: Check whether npm already has this version
+        id: version
+        run: |
+          version="$(node -p "require('./packages/plugin-sdk/package.json').version")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if npm view "@t3mode/plugin-sdk@$version" version > /dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "@t3mode/plugin-sdk@$version is already on npm."
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+      - run: pnpm install --frozen-lockfile
+      - name: Pack
+        # pnpm resolves catalog: versions and publishConfig; npm publishes the tarball as is.
+        run: pnpm --filter @t3mode/plugin-sdk pack --pack-destination "$RUNNER_TEMP/sdk"
+      - name: Dry run
+        if: github.event_name == 'pull_request' || steps.version.outputs.published == 'true'
+        run: npm publish "$RUNNER_TEMP"/sdk/*.tgz --access public --dry-run
+      - name: Publish ${{ steps.version.outputs.version }}
+        if: github.event_name != 'pull_request' && steps.version.outputs.published == 'false'
+        run: npm publish "$RUNNER_TEMP"/sdk/*.tgz --access public

@@ -1,13 +1,15 @@
 // T3 Mode's pages inside T3 Code's settings. A "T3 Mode" group in the settings navigation holds
 // two entries, like Vencord's: "T3 Mode" (version, updates, shortcut, troubleshooting) and
-// "Plugins" (a card grid with search and filter, and a page per plugin for its options). Pages
-// open in the settings content pane, built from T3 Code's own components (see native.ts).
+// "Plugins" (install from GitHub, a card grid with search and filter, and a page per plugin for
+// its options and source). Pages open in the settings content pane, built from T3 Code's own
+// components (see native.ts).
 //
 // The pane is React's. t3mode adds its page as the pane's last child and hides React's
 // children with CSS while it is open, so React's nodes are never moved or removed.
+import { type InstalledPlugin, type PluginPreview, sourceLabel } from "@t3mode/shared/Plugins";
+
 import { h } from "../dom.ts";
 import type { PluginState, Runtime } from "../Runtime.ts";
-import type { Plugin } from "../types.ts";
 import { icon, type IconName } from "./icons.ts";
 import {
   button,
@@ -54,13 +56,47 @@ const FILTERS = [
 
 type Tone = "active" | "waiting" | "failed" | "off";
 
-const status = (runtime: Runtime, plugin: Plugin): { tone: Tone; text: string } => {
+type InstallStep =
+  | { readonly kind: "idle" }
+  | { readonly kind: "reading" }
+  | { readonly kind: "failed"; readonly error: string }
+  | { readonly kind: "confirm"; readonly preview: PluginPreview }
+  | { readonly kind: "installing"; readonly preview: PluginPreview };
+
+const canRetry = (runtime: Runtime, plugin: InstalledPlugin): boolean => {
+  const kind = runtime.state(plugin.id).kind;
+  return (
+    kind === "failed" ||
+    (kind === "unavailable" && (plugin.error === undefined || plugin.source.kind === "local"))
+  );
+};
+
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
+
+const busy = async (control: HTMLButtonElement, action: () => Promise<void>): Promise<void> => {
+  control.disabled = true;
+  try {
+    await action();
+  } finally {
+    control.disabled = false;
+  }
+};
+
+const fragment = (...nodes: ReadonlyArray<Node | null>): DocumentFragment => {
+  const result = document.createDocumentFragment();
+  for (const node of nodes) if (node) result.append(node);
+  return result;
+};
+
+const status = (runtime: Runtime, plugin: InstalledPlugin): { tone: Tone; text: string } => {
   const state: PluginState = runtime.state(plugin.id);
   switch (state.kind) {
     case "off":
-      return { tone: "off", text: runtime.isEnabled(plugin) ? "Starting" : "Off" };
+      return { tone: "off", text: runtime.isEnabled(plugin.id) ? "Starting" : "Off" };
     case "failed":
       return { tone: "failed", text: `Stopped after an error: ${state.error.split("\n")[0]}` };
+    case "unavailable":
+      return { tone: "failed", text: `Can't load: ${state.reason}` };
     case "running":
       if (!state.report) return { tone: "active", text: "Running" };
       return {
@@ -70,7 +106,7 @@ const status = (runtime: Runtime, plugin: Plugin): { tone: Tone; text: string } 
   }
 };
 
-const statusLine = (runtime: Runtime, plugin: Plugin) => {
+const statusLine = (runtime: Runtime, plugin: InstalledPlugin) => {
   const { tone, text } = status(runtime, plugin);
   return h(
     "div",
@@ -93,6 +129,9 @@ export class SettingsPage {
   #view: View = { kind: "plugins" };
   #query = "";
   #filter: Filter = "all";
+  #link = "";
+  #step: InstallStep = { kind: "idle" };
+  #installBox: HTMLElement | null = null;
   #root: HTMLElement | null = null;
   #body: HTMLElement | null = null;
   #grid: HTMLElement | null = null;
@@ -209,6 +248,7 @@ export class SettingsPage {
     this.#root = null;
     this.#body = null;
     this.#grid = null;
+    this.#installBox = null;
   }
 
   // --- navigation group -------------------------------------------------------------------
@@ -313,10 +353,7 @@ export class SettingsPage {
     const root = this.#root;
     if (!root) return;
     const focusedId = document.activeElement?.id;
-    const plugin =
-      this.#view.kind === "plugin"
-        ? this.#runtime.plugins.find((item) => item.id === (this.#view as { id: string }).id)
-        : undefined;
+    const plugin = this.#view.kind === "plugin" ? this.#runtime.plugin(this.#view.id) : undefined;
     if (this.#view.kind === "plugin" && !plugin) this.#view = { kind: "plugins" };
 
     const body = h("div", { className: native.pageBody });
@@ -335,7 +372,7 @@ export class SettingsPage {
     if (focusedId) document.getElementById(focusedId)?.focus();
   }
 
-  #header(plugin: Plugin | undefined): HTMLElement {
+  #header(plugin: InstalledPlugin | undefined): HTMLElement {
     const crumbs: Array<Node> = [
       h("li", { className: native.crumb, text: "Settings" }),
       crumbSeparator(),
@@ -449,7 +486,7 @@ export class SettingsPage {
 
   #renderPlugins(body: HTMLElement): void {
     const runtime = this.#runtime;
-    const enabled = runtime.plugins.filter((plugin) => runtime.isEnabled(plugin)).length;
+    const enabled = runtime.plugins.filter((plugin) => runtime.isEnabled(plugin.id)).length;
 
     const search = h("input", {
       className: "t3mode-search-input",
@@ -481,14 +518,27 @@ export class SettingsPage {
     });
     const grid = h("div", { className: "t3mode-grid" });
     this.#grid = grid;
+    const check = button({
+      text: "Check for updates",
+      icon: "retry",
+      variant: "outline",
+      onClick: () => void busy(check, () => this.#checkUpdates()),
+    });
+    check.id = "t3mode-plugins-check";
 
     body.append(
+      this.#installSection(),
       section(
         "Plugins",
-        h("span", {
-          className: "t3mode-count",
-          text: `${enabled} of ${runtime.plugins.length} enabled`,
-        }),
+        h(
+          "div",
+          { className: "t3mode-actions" },
+          h("span", {
+            className: "t3mode-count",
+            text: `${enabled} of ${runtime.plugins.length} enabled`,
+          }),
+          check,
+        ),
         h(
           "div",
           { className: "t3mode-toolbar" },
@@ -516,13 +566,221 @@ export class SettingsPage {
     this.#renderGrid();
   }
 
+  #installSection(): HTMLElement {
+    const link = h("input", {
+      className: "t3mode-search-input",
+      attrs: {
+        id: "t3mode-plugin-link",
+        type: "text",
+        placeholder: "owner/repo, or the plugin's GitHub link",
+        "aria-label": "Plugin's GitHub link",
+        autocomplete: "off",
+        spellcheck: "false",
+      },
+      props: { value: this.#link },
+      on: {
+        input: (event) => {
+          this.#link = (event.target as HTMLInputElement).value;
+          if (this.#step.kind === "failed") this.#setStep({ kind: "idle" });
+        },
+        keydown: (event) => {
+          if ((event as KeyboardEvent).key === "Enter") void this.#preview();
+        },
+      },
+    });
+    const box = h("div", { className: "t3mode-install" });
+    this.#installBox = box;
+    const install = button({
+      text: "Install",
+      icon: "download",
+      variant: "outline",
+      onClick: () => void this.#preview(),
+    });
+    install.id = "t3mode-plugin-install";
+    const result = section(
+      "Install from GitHub",
+      null,
+      h(
+        "div",
+        { className: "t3mode-toolbar" },
+        h("label", { className: `${native.selectTrigger} t3mode-search` }, link),
+        install,
+      ),
+      box,
+    );
+    this.#renderInstallStep();
+    return result;
+  }
+
+  #setStep(step: InstallStep): void {
+    this.#step = step;
+    this.#renderInstallStep();
+  }
+
+  #renderInstallStep(): void {
+    const box = this.#installBox;
+    if (!box) return;
+    const step = this.#step;
+    switch (step.kind) {
+      case "idle":
+        box.replaceChildren();
+        return;
+      case "reading":
+        box.replaceChildren(
+          h("p", {
+            className: `${native.rowDescription} t3mode-empty`,
+            text: "Reading the release…",
+          }),
+        );
+        return;
+      case "failed":
+        box.replaceChildren(
+          h("p", { className: "t3mode-install-error", attrs: { role: "alert" }, text: step.error }),
+        );
+        return;
+      case "confirm":
+      case "installing":
+        box.replaceChildren(this.#confirmPanel(step.preview, step.kind === "installing"));
+    }
+  }
+
+  #confirmPanel(preview: PluginPreview, installing: boolean): HTMLElement {
+    const { manifest, source } = preview;
+    const confirm = button({
+      text: installing ? "Installing…" : "Install",
+      icon: "download",
+      variant: "outline",
+      onClick: () => void this.#install(preview),
+    });
+    confirm.id = "t3mode-plugin-confirm";
+    confirm.disabled = installing;
+    const cancel = button({ text: "Cancel", onClick: () => this.#setStep({ kind: "idle" }) });
+    cancel.disabled = installing;
+    const by = manifest.author ? `by ${manifest.author} · ` : "";
+    return h(
+      "div",
+      {
+        className: `${native.card} t3mode-confirm`,
+        attrs: { "aria-label": `Install ${manifest.name}` },
+      },
+      h("h3", { className: native.rowTitle, text: `${manifest.name} ${manifest.version}` }),
+      h("p", {
+        className: native.rowDescription,
+        text: `${by}github.com/${sourceLabel(source)}`,
+      }),
+      manifest.description
+        ? h("p", { className: native.rowDescription, text: manifest.description })
+        : null,
+      h(
+        "p",
+        { className: "t3mode-warning" },
+        icon("warning"),
+        h("span", {
+          text: "A plugin gets full access to T3 Code, including your threads. Install it only if you trust its author.",
+        }),
+      ),
+      h("div", { className: "t3mode-actions" }, confirm, cancel),
+    );
+  }
+
+  async #preview(): Promise<void> {
+    const input = this.#link.trim();
+    if (input === "" || this.#step.kind === "reading" || this.#step.kind === "installing") return;
+    this.#setStep({ kind: "reading" });
+    const result = await this.#runtime.preview(input);
+    this.#setStep(
+      result.ok
+        ? { kind: "confirm", preview: result.value }
+        : { kind: "failed", error: result.error },
+    );
+    if (result.ok) document.getElementById("t3mode-plugin-confirm")?.focus();
+  }
+
+  async #install(preview: PluginPreview): Promise<void> {
+    this.#setStep({ kind: "installing", preview });
+    const result = await this.#runtime.install(preview);
+    if (!result.ok) {
+      this.#setStep({ kind: "failed", error: result.error });
+      return;
+    }
+    this.#link = "";
+    const link = document.getElementById("t3mode-plugin-link") as HTMLInputElement | null;
+    if (link) link.value = "";
+    this.#setStep({ kind: "idle" });
+    toast(`${result.value.name} ${result.value.version} is installed.`, "info");
+  }
+
+  async #checkUpdates(): Promise<void> {
+    const result = await this.#runtime.checkUpdates();
+    if (!result.ok) {
+      toast(`Some plugins could not be checked. ${result.error}`, "error");
+      return;
+    }
+    const updates = result.value.filter((plugin) => plugin.update !== undefined).length;
+    toast(
+      updates > 0 ? `${plural(updates, "update")} available.` : "All plugins are up to date.",
+      "info",
+    );
+  }
+
+  async #update(plugin: InstalledPlugin): Promise<void> {
+    const result = await this.#runtime.updatePlugin(plugin.id);
+    toast(
+      result.ok ? `${result.value.name} is updated to ${result.value.version}.` : result.error,
+      result.ok ? "info" : "error",
+    );
+  }
+
+  async #remove(plugin: InstalledPlugin): Promise<void> {
+    const result = await this.#runtime.remove(plugin.id);
+    if (!result.ok) {
+      toast(result.error, "error");
+      return;
+    }
+    toast(`${plugin.name} is removed.`, "info");
+    if (this.#view.kind === "plugin") this.#go({ kind: "plugins" });
+  }
+
+  #updateButton(plugin: InstalledPlugin): HTMLButtonElement | null {
+    if (plugin.update === undefined) return null;
+    const control = button({
+      text: `Update to ${plugin.update}`,
+      icon: "download",
+      variant: "outline",
+      onClick: () => void busy(control, () => this.#update(plugin)),
+    });
+    control.id = `t3mode-${plugin.id}-update`;
+    return control;
+  }
+
+  #removeButton(plugin: InstalledPlugin): HTMLButtonElement {
+    const control = button({
+      text: "Remove",
+      icon: "trash",
+      variant: "outline",
+      onClick: () => void busy(control, () => this.#remove(plugin)),
+    });
+    control.id = `t3mode-${plugin.id}-remove`;
+    return control;
+  }
+
+  #retryButton(plugin: InstalledPlugin, variant: "ghost" | "outline"): HTMLButtonElement | null {
+    if (!canRetry(this.#runtime, plugin)) return null;
+    return button({
+      text: "Retry",
+      icon: "retry",
+      variant,
+      onClick: () => void this.#runtime.retry(plugin.id),
+    });
+  }
+
   #renderGrid(): void {
     const grid = this.#grid;
     if (!grid?.isConnected) return;
     const runtime = this.#runtime;
     const query = this.#query.trim().toLowerCase();
     const shown = runtime.plugins.filter((plugin) => {
-      const on = runtime.isEnabled(plugin);
+      const on = runtime.isEnabled(plugin.id);
       if (this.#filter === "enabled" && !on) return false;
       if (this.#filter === "disabled" && on) return false;
       return (
@@ -534,7 +792,7 @@ export class SettingsPage {
     });
     const count = this.#body?.querySelector(".t3mode-count");
     if (count) {
-      const enabled = runtime.plugins.filter((plugin) => runtime.isEnabled(plugin)).length;
+      const enabled = runtime.plugins.filter((plugin) => runtime.isEnabled(plugin.id)).length;
       count.textContent = `${enabled} of ${runtime.plugins.length} enabled`;
     }
     const focusedId = document.activeElement?.id;
@@ -547,7 +805,7 @@ export class SettingsPage {
               text: query
                 ? `No plugin matches "${this.#query.trim()}".`
                 : runtime.plugins.length === 0
-                  ? "No plugins in this build. Add yours to packages/runtime/src/userplugins, then build and deploy."
+                  ? "No plugins installed yet. Paste a plugin's GitHub link above to install it."
                   : "No plugins here.",
             }),
           ]),
@@ -555,23 +813,21 @@ export class SettingsPage {
     if (focusedId) document.getElementById(focusedId)?.focus();
   }
 
-  #card(plugin: Plugin): HTMLElement {
+  #card(plugin: InstalledPlugin): HTMLElement {
     const runtime = this.#runtime;
-    const hasOptions = Object.keys(plugin.options).length > 0;
     const details = () => this.#go({ kind: "plugin", id: plugin.id });
     const toggle = switchControl({
       label: `Enable ${plugin.name}`,
-      checked: runtime.isEnabled(plugin),
-      onChange: (checked) => void runtime.setEnabled(plugin, checked),
+      checked: runtime.isEnabled(plugin.id),
+      onChange: (checked) => void runtime.setEnabled(plugin.id, checked),
     });
     toggle.id = `t3mode-${plugin.id}-switch`;
     const settings = iconButton({
-      label: hasOptions ? `${plugin.name} settings` : `About ${plugin.name}`,
-      icon: hasOptions ? "settings" : "info",
+      label: `${plugin.name} settings`,
+      icon: "settings",
       onClick: details,
     });
     settings.id = `t3mode-${plugin.id}-details`;
-    const failed = runtime.state(plugin.id).kind === "failed";
     return h(
       "article",
       {
@@ -591,6 +847,10 @@ export class SettingsPage {
         toggle,
       ),
       h("p", {
+        className: "t3mode-card-meta",
+        text: `${plugin.version} · ${sourceLabel(plugin.source)}`,
+      }),
+      h("p", {
         className: `${native.rowDescription} t3mode-card-description`,
         text: plugin.description,
       }),
@@ -598,41 +858,40 @@ export class SettingsPage {
         "div",
         { className: "t3mode-card-foot" },
         statusLine(runtime, plugin),
-        failed
-          ? button({ text: "Retry", icon: "retry", onClick: () => runtime.retry(plugin) })
-          : null,
+        this.#updateButton(plugin),
+        this.#retryButton(plugin, "ghost"),
+        plugin.error === undefined ? null : this.#removeButton(plugin),
       ),
     );
   }
 
-  #renderPlugin(body: HTMLElement, plugin: Plugin): void {
+  #renderPlugin(body: HTMLElement, plugin: InstalledPlugin): void {
     const runtime = this.#runtime;
-    const enabled = runtime.isEnabled(plugin);
-    const values = runtime.options(plugin);
-    const failed = runtime.state(plugin.id).kind === "failed";
+    const enabled = runtime.isEnabled(plugin.id);
+    const values = runtime.options(plugin.id);
     const toggle = switchControl({
       label: `Enable ${plugin.name}`,
       checked: enabled,
-      onChange: (checked) => void runtime.setEnabled(plugin, checked),
+      onChange: (checked) => void runtime.setEnabled(plugin.id, checked),
     });
     toggle.id = `t3mode-${plugin.id}-enabled`;
     toggle.setAttribute("data-t3mode-focus", "");
 
-    const optionRows = Object.entries(plugin.options).map(([key, option]) => {
+    const optionRows = Object.entries(runtime.optionSpec(plugin.id)).map(([key, option]) => {
       const label = option.label;
       const control =
         option.type === "boolean"
           ? switchControl({
               label,
               checked: values[key] === true,
-              onChange: (checked) => void runtime.setOption(plugin, key, checked),
+              onChange: (checked) => void runtime.setOption(plugin.id, key, checked),
             })
           : selectControl({
               host: this.#root ?? body,
               label,
               value: String(values[key]),
               choices: option.choices,
-              onChange: (value) => void runtime.setOption(plugin, key, value),
+              onChange: (value) => void runtime.setOption(plugin.id, key, value),
             });
       control.id = `t3mode-${plugin.id}-option-${key}`;
       return row({
@@ -651,14 +910,12 @@ export class SettingsPage {
           row({
             title: "Status",
             description: statusLine(runtime, plugin),
-            control: failed
-              ? button({
-                  text: "Retry",
-                  icon: "retry",
-                  variant: "outline",
-                  onClick: () => runtime.retry(plugin),
-                })
-              : null,
+            control: this.#retryButton(plugin, "outline"),
+          }),
+          row({
+            title: "Source",
+            description: this.#sourceText(plugin),
+            control: fragment(this.#updateButton(plugin), this.#removeButton(plugin)),
           }),
         ),
       ),
@@ -675,9 +932,21 @@ export class SettingsPage {
             null,
             h("p", {
               className: `${native.rowDescription} t3mode-empty`,
-              text: "This plugin has no options.",
+              text: runtime.optionsKnown(plugin.id)
+                ? "This plugin has no options."
+                : "Its options show once the plugin is on. T3 Mode runs none of a plugin's code while it is off.",
             }),
           ),
     );
+  }
+
+  #sourceText(plugin: InstalledPlugin): string {
+    const where =
+      plugin.source.kind === "github"
+        ? `github.com/${sourceLabel(plugin.source)}`
+        : `Linked from ${plugin.source.path}, read again on every reload`;
+    const by = plugin.author ? ` by ${plugin.author}` : "";
+    const hash = plugin.sha256 ? ` · SHA-256 ${plugin.sha256.slice(0, 12)}` : "";
+    return `${where} · version ${plugin.version}${by}${hash}`;
   }
 }

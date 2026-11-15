@@ -50,6 +50,17 @@ const CSS = `
 [data-t3mode-page] .t3mode-card-description { flex: 1; padding-right: 4px; }
 [data-t3mode-page] .t3mode-card-foot { display: flex; align-items: center; gap: 8px; min-height: 24px; }
 [data-t3mode-page] .t3mode-empty { padding: 4px 16px; }
+[data-t3mode-page] .t3mode-actions { display: flex; align-items: center; gap: 8px; }
+[data-t3mode-page] .t3mode-card-meta {
+  margin-top: -6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--text-xs, 12px); color: var(--muted-foreground);
+}
+[data-t3mode-page] .t3mode-install { display: flex; flex-direction: column; gap: 10px; }
+[data-t3mode-page] .t3mode-install-error { padding: 0 16px; font-size: var(--text-xs, 12px); color: var(--destructive-foreground, #ff8a8a); }
+[data-t3mode-page] .t3mode-confirm { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px; }
+[data-t3mode-page] .t3mode-confirm .t3mode-actions { margin-top: 4px; }
+[data-t3mode-page] .t3mode-warning { display: flex; align-items: flex-start; gap: 6px; font-size: var(--text-xs, 12px); color: var(--foreground); }
+[data-t3mode-page] .t3mode-warning svg { flex: none; width: 14px; height: 14px; margin-top: 1px; color: var(--warning, #f5a524); }
 
 [data-t3mode-page] .t3mode-status {
   display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1;

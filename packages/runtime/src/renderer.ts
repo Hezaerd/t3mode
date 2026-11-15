@@ -1,8 +1,8 @@
-// Page entry, run by the preload in T3 Code's main window: reads settings, starts the plugins,
-// adds the settings entry and hotkey, then tells the main process this launch is healthy.
+// Page entry, run by the preload in T3 Code's main window after the plugins' own scripts: reads
+// settings and the installed plugins, starts them, adds the settings entry and hotkey, then tells
+// the main process this launch is healthy.
 import type { NativeBridge } from "@t3mode/shared/Ipc";
 
-import { plugins } from "./plugins/index.ts";
 import { Runtime } from "./Runtime.ts";
 import { SettingsPage } from "./ui/settingsPage.ts";
 import { installShortcut } from "./ui/shortcut.ts";
@@ -22,8 +22,12 @@ const main = async (): Promise<void> => {
   const native = window.t3modeNative;
   if (!native || window.__t3modeRuntime) return;
   try {
-    const [info, settings] = await Promise.all([native.info(), native.readSettings()]);
-    const runtime = new Runtime(native, plugins, settings, info);
+    const [info, settings, installed] = await Promise.all([
+      native.info(),
+      native.readSettings(),
+      native.plugins.list(),
+    ]);
+    const runtime = new Runtime(native, installed, settings, info);
     window.__t3modeRuntime = runtime;
     runtime.startAll();
     runtime.watchUpdates();
@@ -47,7 +51,7 @@ const main = async (): Promise<void> => {
     await native.ready();
     await native.log(
       "info",
-      `Runtime started on T3 Code ${info.t3codeVersion} with ${plugins.length} plugin${plugins.length === 1 ? "" : "s"}`,
+      `Runtime started on T3 Code ${info.t3codeVersion} with ${installed.length} plugin${installed.length === 1 ? "" : "s"}`,
     );
   } catch (error) {
     await native.log("error", `Runtime failed to start: ${describe(error)}`).catch(() => undefined);

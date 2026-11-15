@@ -1,6 +1,7 @@
 {
   "files": [],
   "references": [
+    { "path": "packages/plugin-sdk" },
     { "path": "packages/shared" },
     { "path": "packages/shim" },
     { "path": "packages/main" },

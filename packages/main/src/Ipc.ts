@@ -1,6 +1,5 @@
 // IPC handlers for the preload. Every call must come from the top frame of T3 Code's main window.
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { app, ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from "electron";
@@ -9,8 +8,9 @@ import { Channel, type Info, isMainWindowUrl } from "@t3mode/shared/Ipc";
 import { T3MODE_VERSION } from "@t3mode/shared/Version";
 
 import { BootGuard } from "./BootGuard.ts";
-import { Files } from "./Files.ts";
+import { withElectronFetch } from "./ElectronFetch.ts";
 import { Home } from "./Home.ts";
+import { PluginHost } from "./PluginHost.ts";
 import { SettingsStore } from "./SettingsStore.ts";
 import { ShortcutActionSchema, T3Keybindings } from "./T3Keybindings.ts";
 import { Updater } from "./Updater.ts";
@@ -70,7 +70,7 @@ const checkSender = (channel: string, event: IpcMainInvokeEvent) => {
 export const register = Effect.fn("Ipc.register")(function* (options: {
   readonly safeMode: boolean;
 }) {
-  const files = yield* Files;
+  const plugins = yield* PluginHost;
   const guard = yield* BootGuard;
   const settings = yield* SettingsStore;
   const keybindings = yield* T3Keybindings;
@@ -104,9 +104,9 @@ export const register = Effect.fn("Ipc.register")(function* (options: {
     );
 
   yield* Effect.sync(() => {
-    handle(Channel.rendererSource, () =>
-      files.readText(layout.rendererJs).pipe(Effect.map(Option.getOrElse(() => ""))),
-    );
+    handle(Channel.pageScripts, () => plugins.pageScripts);
+    handle(Channel.pluginScript, (args) => plugins.pluginScript(args[0]));
+    handle(Channel.plugins, (args) => withElectronFetch(plugins.act(args[0])));
     handle(Channel.log, (args) =>
       Schema.decodeUnknownEffect(LogArgs)(args).pipe(
         Effect.flatMap(([level, message]) =>

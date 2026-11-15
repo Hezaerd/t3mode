@@ -23,15 +23,16 @@ import * as Stream from "effect/Stream";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
-import { app, net } from "electron";
+import { app } from "electron";
 
 import { managesUpdates } from "@t3mode/shared/Settings";
 import type { UpdatePhase, UpdateStatus } from "@t3mode/shared/Updates";
 
+import { withElectronFetch } from "./ElectronFetch.ts";
 import { Files } from "./Files.ts";
 import { helperArguments, launcherCommand } from "./HelperLaunch.ts";
 import { Home } from "./Home.ts";
-import { compareVersions } from "./Semver.ts";
+import { compareVersions } from "@t3mode/shared/Semver";
 import { SettingsStore } from "./SettingsStore.ts";
 import { SignatureJson, signatureCommand } from "./Signature.ts";
 import {
@@ -77,10 +78,6 @@ type Ready = typeof ReadyJson.Type;
 const DesktopSettingsJson = Schema.fromJsonString(
   Schema.Struct({ updateChannel: Schema.optionalKey(Schema.Unknown) }),
 );
-
-/** Electron's own network stack, so system proxies apply as they do for T3 Code's updater. */
-const electronFetch = ((input: RequestInfo | URL, init?: RequestInit) =>
-  net.fetch(input instanceof URL ? input.href : (input as string), init)) as typeof fetch;
 
 const fail = (message: string) => (cause: unknown) => new UpdateError({ message, cause });
 
@@ -327,9 +324,7 @@ export const make = Effect.fn("Updater.make")(function* (options: UpdaterOptions
         );
       }),
     ),
-    // Both are read when a request runs, so they are provided here, not to the layer.
-    Effect.provideService(FetchHttpClient.Fetch, electronFetch),
-    Effect.provideService(HttpClient.TracerPropagationEnabled, false),
+    withElectronFetch,
     Effect.withSpan("Updater.check"),
   );
 

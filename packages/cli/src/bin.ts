@@ -1,4 +1,4 @@
-// `pnpm t3mode <command>`: install, repair, uninstall, deploy, status, safe, sandbox.
+// `pnpm t3mode <command>`: install, repair, uninstall, deploy, status, safe, sandbox, plugin.
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Console from "effect/Console";
@@ -7,9 +7,18 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import { Command, Flag } from "effect/cli";
+import { Argument, Command, Flag, Prompt } from "effect/cli";
+import { FetchHttpClient } from "effect/http";
 
-import { HOME_ENV, SANDBOX_APPDATA_ENV, SANDBOX_INSTALLER_ENV } from "@t3mode/shared/Layout";
+import {
+  GITHUB_URL_ENV,
+  HOME_ENV,
+  SANDBOX_APPDATA_ENV,
+  SANDBOX_INSTALLER_ENV,
+  githubUrl,
+} from "@t3mode/shared/Layout";
+import { type InstalledPlugin, sourceLabel } from "@t3mode/shared/Plugins";
+import * as PluginStore from "@t3mode/shared/PluginStore";
 import { T3MODE_VERSION } from "@t3mode/shared/Version";
 
 import * as Artifacts from "./Artifacts.ts";
@@ -241,10 +250,142 @@ const sandbox = Command.make(
   }),
 ).pipe(Command.withDescription("Run t3mode on a private copy of T3 Code, for development"));
 
-const MainLayer = AsarArchive.layer.pipe(Layer.provideMerge(NodeServices.layer));
+const pluginStore = Effect.gen(function* () {
+  const flags = yield* root;
+  const layout = yield* Target.resolveHome(flags.home);
+  return yield* PluginStore.make({ layout, githubBase: githubUrl(process.env) });
+});
+
+const RELOAD = "Reload T3 Code (Ctrl+R) to apply it.";
+
+const describePlugin = (plugin: InstalledPlugin) =>
+  [
+    `${plugin.id.padEnd(24)} ${plugin.version.padEnd(12)} ${sourceLabel(plugin.source)}`,
+    plugin.error === undefined ? null : `  can't load: ${plugin.error}`,
+  ]
+    .filter((line) => line !== null)
+    .join("\n");
+
+const pluginList = Command.make(
+  "list",
+  {},
+  Effect.fn(function* () {
+    const plugins = yield* (yield* pluginStore).list;
+    yield* Console.log(
+      plugins.length === 0
+        ? "No plugins installed. Add one with: pnpm t3mode plugin add <owner/repo>"
+        : plugins.map(describePlugin).join("\n"),
+    );
+  }),
+).pipe(Command.withDescription("List the installed plugins"));
+
+const pluginAdd = Command.make(
+  "add",
+  {
+    link: Argument.String("link").pipe(
+      Argument.withDescription("owner/repo, the repository's link, or a release tag's link"),
+    ),
+    yes: Flag.Boolean("yes").pipe(
+      Flag.withDescription("Install without asking"),
+      Flag.withDefault(false),
+    ),
+  },
+  Effect.fn(function* (options) {
+    const store = yield* pluginStore;
+    const { source, manifest } = yield* store.preview(options.link);
+    yield* Console.log(
+      [
+        `${manifest.name} ${manifest.version}${manifest.author ? ` by ${manifest.author}` : ""}`,
+        `from github.com/${sourceLabel(source)}`,
+        manifest.description,
+        "",
+        "A plugin gets full access to T3 Code, including your threads. Install it only if you trust its author.",
+      ].join("\n"),
+    );
+    if (!options.yes) {
+      const confirmed = yield* Prompt.Confirm({ message: `Install ${manifest.name}?` });
+      if (!confirmed) {
+        yield* Console.log("Nothing was installed.");
+        return;
+      }
+    }
+    const installed = yield* store.install(source, manifest.id);
+    yield* Console.log(`Installed ${installed.name} ${installed.version}. ${RELOAD}`);
+  }),
+).pipe(Command.withDescription("Install a plugin from a GitHub release"));
+
+const pluginUpdate = Command.make(
+  "update",
+  {
+    id: Argument.String("id").pipe(
+      Argument.withDescription("The plugin to update (default: every plugin with an update)"),
+      Argument.optional,
+    ),
+  },
+  Effect.fn(function* (options) {
+    const store = yield* pluginStore;
+    const ids = Option.isSome(options.id)
+      ? [options.id.value]
+      : yield* Effect.gen(function* () {
+          const { updates, failures } = yield* store.checkUpdates;
+          for (const [id, message] of Object.entries(failures)) {
+            yield* Console.log(`Could not check ${id}: ${message}`);
+          }
+          return Object.keys(updates);
+        });
+    if (ids.length === 0) {
+      yield* Console.log("No updates.");
+      return;
+    }
+    for (const id of ids) {
+      const updated = yield* store.update(id);
+      yield* Console.log(`Installed the latest release of ${updated.name}: ${updated.version}.`);
+    }
+    yield* Console.log(RELOAD);
+  }),
+).pipe(Command.withDescription("Install the latest release of unpinned GitHub plugins"));
+
+const pluginRemove = Command.make(
+  "remove",
+  { id: Argument.String("id").pipe(Argument.withDescription("The plugin's id")) },
+  Effect.fn(function* (options) {
+    const removed = yield* (yield* pluginStore).remove(options.id);
+    yield* Console.log(
+      removed === "removed"
+        ? `Removed ${options.id}. ${RELOAD}`
+        : `${options.id} is not installed.`,
+    );
+  }),
+).pipe(Command.withDescription("Remove a plugin"));
+
+const pluginLink = Command.make(
+  "link",
+  {
+    folder: Argument.Directory("folder", { mustExist: true }).pipe(
+      Argument.withDescription("A built plugin: the folder holding manifest.json and plugin.js"),
+    ),
+  },
+  Effect.fn(function* (options) {
+    const linked = yield* (yield* pluginStore).link(options.folder);
+    yield* Console.log(
+      `Linked ${linked.name} ${linked.version}. After each rebuild, reload T3 Code (Ctrl+R) to pick it up.`,
+    );
+  }),
+).pipe(Command.withDescription("Use a plugin you are developing, read from its folder"));
+
+const plugin = Command.make("plugin").pipe(
+  Command.withDescription(
+    `Install and manage plugins (GitHub downloads go to $${GITHUB_URL_ENV} when it is set)`,
+  ),
+  Command.withSubcommands([pluginList, pluginAdd, pluginUpdate, pluginRemove, pluginLink]),
+);
+
+const MainLayer = Layer.mergeAll(AsarArchive.layer, FetchHttpClient.layer).pipe(
+  Layer.provideMerge(NodeServices.layer),
+);
 
 root.pipe(
-  Command.withSubcommands([install, repair, uninstall, deploy, status, safe, sandbox]),
+  Command.withSubcommands([install, repair, uninstall, deploy, status, safe, sandbox, plugin]),
   Command.run({ version: T3MODE_VERSION }),
   Effect.provide(MainLayer),
   NodeRuntime.runMain,

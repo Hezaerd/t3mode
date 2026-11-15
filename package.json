@@ -2,6 +2,7 @@
   "name": "@t3mode/monorepo",
   "private": true,
   "type": "module",
+  "license": "MIT",
   "scripts": {
     "build": "vp run -r build",
     "dev": "node scripts/dev.ts",

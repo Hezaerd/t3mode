@@ -1,22 +1,66 @@
 // Starts and stops plugins. Everything a plugin creates goes through its API and is undone,
 // newest first, when it stops. A plugin that throws is stopped and reported; the others keep running.
+import type { OptionsSpec, PluginApi, PluginDefinition, PluginReport } from "@t3mode/plugin-sdk";
 import type { Info, NativeBridge } from "@t3mode/shared/Ipc";
+import type {
+  InstalledPlugin,
+  PluginPreview,
+  PluginRegistration,
+  PluginResult,
+  RemoveResult,
+} from "@t3mode/shared/Plugins";
 import type { PluginSettings, Settings } from "@t3mode/shared/Settings";
 import type { ShortcutAction, ShortcutStatus } from "@t3mode/shared/Shortcut";
 import type { UpdateAction, UpdateStatus } from "@t3mode/shared/Updates";
 
-import type { OptionsSpec, Plugin, PluginApi, PluginReport } from "./types.ts";
+import { queryFirst } from "./dom.ts";
+import { findHookState, findPropsUp } from "./lib/react.ts";
+import { currentThreadKey } from "./lib/thread.ts";
 import { toast } from "./ui/toast.ts";
 
 export type PluginState =
   | { readonly kind: "off" }
   | { readonly kind: "running"; readonly report: PluginReport | null }
-  | { readonly kind: "failed"; readonly error: string };
+  | { readonly kind: "failed"; readonly error: string }
+  | { readonly kind: "unavailable"; readonly reason: string };
+
+type Entry =
+  | {
+      readonly info: InstalledPlugin;
+      readonly kind: "loaded";
+      readonly definition: PluginDefinition;
+    }
+  | { readonly info: InstalledPlugin; readonly kind: "broken"; readonly reason: string }
+  // Registered but never run: a plugin that is off runs none of its code, not even its top level.
+  | { readonly info: InstalledPlugin; readonly kind: "unloaded"; readonly load: () => unknown };
+
+export interface PluginRegistry {
+  readonly push: (...registrations: ReadonlyArray<PluginRegistration>) => number;
+}
+
+declare global {
+  interface Window {
+    __t3modePlugins?: PluginRegistry | Array<PluginRegistration>;
+  }
+}
 
 const STORAGE_PREFIX = "t3mode:";
 
 const describe = (error: unknown) =>
   error instanceof Error ? (error.stack ?? error.message) : String(error);
+
+const firstLine = (text: string) => text.split("\n")[0] ?? text;
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const isDefinition = (value: unknown): value is PluginDefinition =>
+  isObject(value) && typeof value["start"] === "function" && isObject(value["options"]);
+
+export const pluginDefinition = (exported: unknown): PluginDefinition | undefined => {
+  const candidate = isObject(exported) && !isDefinition(exported) ? exported["default"] : exported;
+  return isDefinition(candidate) ? candidate : undefined;
+};
 
 export const optionValues = (
   spec: OptionsSpec,
@@ -36,7 +80,8 @@ export const optionValues = (
 
 export class Runtime {
   readonly #native: NativeBridge;
-  readonly #plugins: ReadonlyArray<Plugin>;
+  readonly #entries = new Map<string, Entry>();
+  readonly #registrations = new Map<string, () => unknown>();
   readonly #cleanups = new Map<string, Array<() => void>>();
   readonly #states = new Map<string, PluginState>();
   readonly #listeners = new Set<() => void>();
@@ -47,30 +92,56 @@ export class Runtime {
 
   constructor(
     native: NativeBridge,
-    plugins: ReadonlyArray<Plugin>,
+    installed: ReadonlyArray<InstalledPlugin>,
     settings: Settings,
     info: Info,
   ) {
     this.#native = native;
-    this.#plugins = plugins;
     this.#settings = settings;
     this.info = info;
+    const pending: unknown = window.__t3modePlugins;
+    if (Array.isArray(pending)) for (const item of pending) this.#register(item);
+    window.__t3modePlugins = {
+      push: (...registrations) => {
+        for (const item of registrations) this.#register(item);
+        return registrations.length;
+      },
+    };
+    for (const plugin of installed) this.#entries.set(plugin.id, this.#entryFor(plugin));
   }
 
-  get plugins(): ReadonlyArray<Plugin> {
-    return this.#plugins;
+  get plugins(): ReadonlyArray<InstalledPlugin> {
+    return [...this.#entries.values()]
+      .map((entry) => entry.info)
+      .toSorted((a, b) => a.name.localeCompare(b.name));
+  }
+
+  plugin(id: string): InstalledPlugin | undefined {
+    return this.#entries.get(id)?.info;
+  }
+
+  optionSpec(id: string): OptionsSpec {
+    const entry = this.#entries.get(id);
+    return entry?.kind === "loaded" ? entry.definition.options : {};
+  }
+
+  /** False until the plugin is first turned on, because its options are in its code. */
+  optionsKnown(id: string): boolean {
+    return this.#entries.get(id)?.kind === "loaded";
   }
 
   state(id: string): PluginState {
+    const entry = this.#entries.get(id);
+    if (entry?.kind === "broken") return { kind: "unavailable", reason: entry.reason };
     return this.#states.get(id) ?? { kind: "off" };
   }
 
-  isEnabled(plugin: Plugin): boolean {
-    return this.#settings.plugins[plugin.id]?.enabled ?? plugin.enabledByDefault;
+  isEnabled(id: string): boolean {
+    return this.#settings.plugins[id]?.enabled ?? true;
   }
 
-  options(plugin: Plugin): Record<string, unknown> {
-    return optionValues(plugin.options, this.#settings.plugins[plugin.id]?.options);
+  options(id: string): Record<string, unknown> {
+    return optionValues(this.optionSpec(id), this.#settings.plugins[id]?.options);
   }
 
   /** Called whenever a plugin's state or settings change, for the settings page. */
@@ -80,28 +151,96 @@ export class Runtime {
   }
 
   startAll(): void {
-    for (const plugin of this.#plugins) if (this.isEnabled(plugin)) this.#start(plugin);
-  }
-
-  async setEnabled(plugin: Plugin, enabled: boolean): Promise<void> {
-    this.#stop(plugin);
-    if (enabled) this.#start(plugin);
-    await this.#save(plugin.id, { enabled });
-  }
-
-  async setOption(plugin: Plugin, key: string, value: unknown): Promise<void> {
-    const options = { ...this.#settings.plugins[plugin.id]?.options, [key]: value };
-    if (this.isEnabled(plugin)) {
-      this.#stop(plugin);
-      this.#start(plugin, options);
+    for (const entry of this.#entries.values()) {
+      if (!this.isEnabled(entry.info.id)) continue;
+      if (entry.kind === "broken") {
+        this.log("error", `Plugin ${entry.info.id} can't start: ${entry.reason}`);
+        toast(
+          `${entry.info.name} can't start. Open T3 Mode's plugins in Settings to see why.`,
+          "error",
+        );
+      } else {
+        this.#start(entry.info.id);
+      }
     }
-    await this.#save(plugin.id, { options });
   }
 
-  /** Restarts a failed plugin. */
-  retry(plugin: Plugin): void {
-    this.#stop(plugin);
-    this.#start(plugin);
+  async setEnabled(id: string, enabled: boolean): Promise<void> {
+    this.#stop(id);
+    if (enabled) this.#start(id);
+    await this.#save(id, { enabled });
+  }
+
+  async setOption(id: string, key: string, value: unknown): Promise<void> {
+    const options = { ...this.#settings.plugins[id]?.options, [key]: value };
+    if (this.isEnabled(id)) {
+      this.#stop(id);
+      this.#start(id, options);
+    }
+    await this.#save(id, { options });
+  }
+
+  async retry(id: string): Promise<void> {
+    const entry = this.#entries.get(id);
+    if (!entry) return;
+    this.#stop(id);
+    this.#states.delete(id);
+    if (entry.kind === "broken") await this.#rereadFromDisk(entry.info);
+    if (this.isEnabled(id)) this.#start(id);
+    this.#emit();
+  }
+
+  async #rereadFromDisk(previous: InstalledPlugin): Promise<void> {
+    const listed = await this.#native.plugins.list().catch(() => undefined);
+    const info = listed?.find((plugin) => plugin.id === previous.id) ?? previous;
+    if (info.error === undefined) {
+      this.#registrations.delete(info.id);
+      await this.#native.loadPlugin(info.id).catch((error: unknown) => {
+        this.log("error", `Plugin ${info.id} could not be loaded: ${describe(error)}`);
+      });
+    }
+    this.#entries.set(info.id, this.#entryFor(info));
+  }
+
+  preview(input: string): Promise<PluginResult<PluginPreview>> {
+    return this.#ask("Preview", () => this.#native.plugins.preview(input));
+  }
+
+  async install(preview: PluginPreview): Promise<PluginResult<InstalledPlugin>> {
+    const result = await this.#ask("Install", () =>
+      this.#native.plugins.install(preview.source, preview.manifest.id),
+    );
+    return this.#loadAndStart(result);
+  }
+
+  async updatePlugin(id: string): Promise<PluginResult<InstalledPlugin>> {
+    const result = await this.#ask("Update", () => this.#native.plugins.update(id));
+    return this.#loadAndStart(result);
+  }
+
+  async remove(id: string): Promise<PluginResult<RemoveResult>> {
+    const result = await this.#ask("Remove", () => this.#native.plugins.remove(id));
+    if (result.ok) {
+      this.#stop(id);
+      this.#entries.delete(id);
+      this.#registrations.delete(id);
+      this.#states.delete(id);
+      this.#emit();
+    }
+    return result;
+  }
+
+  async checkUpdates(): Promise<PluginResult<ReadonlyArray<InstalledPlugin>>> {
+    const result = await this.#ask("Check", () => this.#native.plugins.checkUpdates());
+    const listed = result.ok
+      ? result.value
+      : await this.#native.plugins.list().catch(() => this.plugins);
+    for (const info of listed) {
+      const entry = this.#entries.get(info.id);
+      if (entry) this.#entries.set(info.id, { ...entry, info });
+    }
+    this.#emit();
+    return result;
   }
 
   /** T3 Mode's shortcut in T3 Code's keybindings.json; "unavailable" when that fails. */
@@ -160,6 +299,65 @@ export class Runtime {
     void this.#native.log(level, message).catch(() => undefined);
   }
 
+  #register(item: unknown): void {
+    if (isObject(item) && typeof item["id"] === "string" && typeof item["load"] === "function") {
+      this.#registrations.set(item["id"], item["load"] as () => unknown);
+    } else {
+      this.log("warn", "Ignored a plugin registration that has no id or load function");
+    }
+  }
+
+  #entryFor(info: InstalledPlugin): Entry {
+    if (info.error !== undefined) return { info, kind: "broken", reason: info.error };
+    const load = this.#registrations.get(info.id);
+    if (!load) {
+      return { info, kind: "broken", reason: "Its code didn't run. See T3 Mode's log." };
+    }
+    return this.isEnabled(info.id) ? this.#run(info, load) : { info, kind: "unloaded", load };
+  }
+
+  #run(info: InstalledPlugin, load: () => unknown): Entry {
+    try {
+      const definition = pluginDefinition(load());
+      return definition
+        ? { info, kind: "loaded", definition }
+        : { info, kind: "broken", reason: "plugin.js doesn't export definePlugin(...)." };
+    } catch (error) {
+      this.log("error", `Plugin ${info.id} failed to load: ${describe(error)}`);
+      return { info, kind: "broken", reason: `Its code threw: ${firstLine(describe(error))}` };
+    }
+  }
+
+  async #loadAndStart(
+    result: PluginResult<InstalledPlugin>,
+  ): Promise<PluginResult<InstalledPlugin>> {
+    if (!result.ok) return result;
+    const info = result.value;
+    this.#stop(info.id);
+    this.#states.delete(info.id);
+    this.#registrations.delete(info.id);
+    if (info.error === undefined) {
+      try {
+        await this.#native.loadPlugin(info.id);
+      } catch (error) {
+        this.log("error", `Plugin ${info.id} could not be loaded: ${describe(error)}`);
+      }
+    }
+    this.#entries.set(info.id, this.#entryFor(info));
+    if (this.isEnabled(info.id)) this.#start(info.id);
+    this.#emit();
+    return result;
+  }
+
+  async #ask<A>(action: string, call: () => Promise<PluginResult<A>>): Promise<PluginResult<A>> {
+    try {
+      return await call();
+    } catch (error) {
+      this.log("error", `${action} failed: ${describe(error)}`);
+      return { ok: false, error: `${action} failed. See T3 Mode's log.` };
+    }
+  }
+
   #emit(): void {
     for (const listener of this.#listeners) {
       try {
@@ -214,36 +412,44 @@ export class Runtime {
     }
   }
 
-  #fail(plugin: Plugin, error: unknown): void {
-    if (this.state(plugin.id).kind !== "running") return;
-    this.#stop(plugin);
+  #fail(id: string, error: unknown): void {
+    if (this.state(id).kind !== "running") return;
+    this.#stop(id);
     const detail = describe(error);
-    this.#setState(plugin.id, { kind: "failed", error: detail.split("\n")[0] ?? detail });
-    this.log("error", `Plugin ${plugin.id} failed and was stopped: ${detail}`);
+    this.#setState(id, { kind: "failed", error: firstLine(detail) });
+    this.log("error", `Plugin ${id} failed and was stopped: ${detail}`);
     toast(
-      `${plugin.name} stopped after an error. Open T3 Mode's plugins in Settings to retry.`,
+      `${this.plugin(id)?.name ?? id} stopped after an error. Open T3 Mode's plugins in Settings to retry.`,
       "error",
     );
   }
 
-  #stop(plugin: Plugin): void {
-    const cleanups = this.#cleanups.get(plugin.id) ?? [];
-    this.#cleanups.delete(plugin.id);
+  #stop(id: string): void {
+    const cleanups = this.#cleanups.get(id) ?? [];
+    this.#cleanups.delete(id);
     for (const cleanup of cleanups.toReversed()) {
       try {
         cleanup();
       } catch (error) {
-        this.log("warn", `Cleanup of ${plugin.id} failed: ${describe(error)}`);
+        this.log("warn", `Cleanup of ${id} failed: ${describe(error)}`);
       }
     }
-    if (this.state(plugin.id).kind === "running") this.#setState(plugin.id, { kind: "off" });
+    if (this.#states.get(id)?.kind === "running") this.#setState(id, { kind: "off" });
   }
 
-  #start(plugin: Plugin, storedOptions?: PluginSettings["options"]): void {
+  #start(id: string, storedOptions?: PluginSettings["options"]): void {
+    let entry = this.#entries.get(id);
+    if (entry?.kind === "unloaded") {
+      entry = this.#run(entry.info, entry.load);
+      this.#entries.set(id, entry);
+      this.#emit();
+    }
+    if (entry?.kind !== "loaded") return;
+    const { definition } = entry;
     const cleanups: Array<() => void> = [];
-    this.#cleanups.set(plugin.id, cleanups);
-    this.#setState(plugin.id, { kind: "running", report: null });
-    const alive = () => this.#cleanups.get(plugin.id) === cleanups;
+    this.#cleanups.set(id, cleanups);
+    this.#setState(id, { kind: "running", report: null });
+    const alive = () => this.#cleanups.get(id) === cleanups;
 
     /** Wraps every callback a plugin hands to the API, so its errors stop only that plugin. */
     const guard =
@@ -253,20 +459,20 @@ export class Runtime {
         try {
           callback(...args);
         } catch (error) {
-          this.#fail(plugin, error);
+          this.#fail(id, error);
         }
       };
     const add = (cleanup: () => void) => cleanups.push(cleanup);
 
     const api: PluginApi = {
-      id: plugin.id,
+      id,
       options: optionValues(
-        plugin.options,
-        storedOptions ?? this.#settings.plugins[plugin.id]?.options,
+        definition.options,
+        storedOptions ?? this.#settings.plugins[id]?.options,
       ) as PluginApi["options"],
       css: (text) => {
         const style = document.createElement("style");
-        style.dataset["t3modePlugin"] = plugin.id;
+        style.dataset["t3modePlugin"] = id;
         style.textContent = text;
         document.head.append(style);
         add(() => style.remove());
@@ -303,7 +509,7 @@ export class Runtime {
       },
       element: (tag) => {
         const element = document.createElement(tag);
-        element.dataset["t3modePlugin"] = plugin.id;
+        element.dataset["t3modePlugin"] = id;
         add(() => element.remove());
         return element;
       },
@@ -311,7 +517,7 @@ export class Runtime {
       storage: {
         get: (key, fallback) => {
           try {
-            const raw = localStorage.getItem(`${STORAGE_PREFIX}${plugin.id}:${key}`);
+            const raw = localStorage.getItem(`${STORAGE_PREFIX}${id}:${key}`);
             return raw === null ? fallback : (JSON.parse(raw) as typeof fallback);
           } catch {
             return fallback;
@@ -319,25 +525,28 @@ export class Runtime {
         },
         set: (key, value) => {
           try {
-            localStorage.setItem(`${STORAGE_PREFIX}${plugin.id}:${key}`, JSON.stringify(value));
+            localStorage.setItem(`${STORAGE_PREFIX}${id}:${key}`, JSON.stringify(value));
           } catch (error) {
-            this.log("warn", `Plugin ${plugin.id} could not store ${key}: ${describe(error)}`);
+            this.log("warn", `Plugin ${id} could not store ${key}: ${describe(error)}`);
           }
         },
       },
-      log: (level, message) => this.log(level, `[${plugin.id}] ${message}`),
+      log: (level, message) => this.log(level, `[${id}] ${message}`),
       report: (report) => {
-        const state = this.state(plugin.id);
+        const state = this.state(id);
         if (!alive() || state.kind !== "running") return;
         if (state.report?.state === report.state && state.report.detail === report.detail) return;
-        this.#setState(plugin.id, { kind: "running", report });
+        this.#setState(id, { kind: "running", report });
       },
+      queryFirst,
+      currentThreadKey,
+      react: { findPropsUp, findHookState },
     };
 
     try {
-      plugin.start(api);
+      definition.start(api);
     } catch (error) {
-      this.#fail(plugin, error);
+      this.#fail(id, error);
     }
   }
 }

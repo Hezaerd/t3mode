@@ -34,6 +34,16 @@ const defaultHome = Effect.gen(function* () {
   return path.join(yield* Config.String("APPDATA"), "t3mode");
 });
 
+export const resolveHome = Effect.fn("Target.resolveHome")(
+  function* (home: Option.Option<string>) {
+    const path = yield* Path.Path;
+    return homeLayout(Option.isSome(home) ? path.resolve(home.value) : yield* defaultHome);
+  },
+  Effect.mapError(
+    (cause) => new CliFailure({ message: "Could not find the t3mode home folder.", cause }),
+  ),
+);
+
 export const resolve = Effect.fn("Target.resolve")(
   function* (flags: TargetFlags) {
     const fs = yield* FileSystem.FileSystem;
@@ -41,7 +51,7 @@ export const resolve = Effect.fn("Target.resolve")(
     const installDir = Option.isSome(flags.installDir)
       ? path.resolve(flags.installDir.value)
       : yield* defaultInstallDir;
-    const home = Option.isSome(flags.home) ? path.resolve(flags.home.value) : yield* defaultHome;
+    const home = yield* resolveHome(flags.home);
 
     const entries = yield* fs
       .readDirectory(installDir)
@@ -60,7 +70,7 @@ export const resolve = Effect.fn("Target.resolve")(
       installDir,
       resourcesDir: path.join(installDir, "resources"),
       exe: path.join(installDir, exeName),
-      home: homeLayout(home),
+      home,
     } satisfies Target;
   },
   Effect.mapError((error) =>
