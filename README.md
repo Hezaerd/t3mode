@@ -35,7 +35,7 @@ t3mode is a community project. The T3 Code team doesn't make or support it, so r
    pnpm t3mode install
    ```
 
-   To have the command wait until T3 Code closes, add `--wait`. To start T3 Code when it finishes, add `--launch`.
+   The command renames T3 Code's `resources\app.asar` to `_app.asar` and puts t3mode's loader in its place. `pnpm t3mode uninstall` puts the original back. To have the command wait until T3 Code closes, add `--wait`. To start T3 Code when it finishes, add `--launch`.
 
 4. Start T3 Code. The settings now have a **T3 Mode** group.
 
@@ -64,7 +64,7 @@ To give updates back to T3 Code, turn off **Install updates through T3 Mode**. A
 
 ## If something breaks
 
-- `pnpm t3mode safe` starts T3 Code once without t3mode and without plugins.
+- `pnpm t3mode safe` makes the next T3 Code launch skip t3mode and its plugins. The launch after that loads them again.
 - `pnpm t3mode uninstall` restores the original T3 Code. Add `--purge` to also delete t3mode's data in `%APPDATA%\t3mode`.
 - Logs are in `%APPDATA%\t3mode\logs`.
 
