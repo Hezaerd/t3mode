@@ -25,6 +25,7 @@ export interface Manifest {
   readonly author?: string;
   /** The plugin API's major version the plugin was built for. */
   readonly api: number;
+  readonly sockets?: ReadonlyArray<string>;
 }
 
 export interface GithubSource {
@@ -56,12 +57,25 @@ export interface Lockfile {
 export const lockEntry = (lock: Lockfile, id: string): LockEntry | undefined =>
   Object.hasOwn(lock.plugins, id) ? lock.plugins[id] : undefined;
 
+// A leading letter or digit keeps names like ".." from walking out of \\.\pipe\.
+export const SOCKET_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+export const SOCKET_ALLOW_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\*?$/;
+
+export const socketAllowed = (patterns: ReadonlyArray<string>, name: string): boolean =>
+  SOCKET_NAME_PATTERN.test(name) &&
+  patterns.some(
+    (pattern) =>
+      SOCKET_ALLOW_PATTERN.test(pattern) &&
+      (pattern.endsWith("*") ? name.startsWith(pattern.slice(0, -1)) : name === pattern),
+  );
+
 export interface InstalledPlugin {
   readonly id: string;
   readonly name: string;
   readonly description: string;
   readonly version: string;
   readonly author?: string;
+  readonly sockets?: ReadonlyArray<string>;
   readonly source: PluginSource;
   readonly sha256?: string;
   readonly error?: string;

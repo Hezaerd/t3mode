@@ -30,6 +30,7 @@ import {
   PLUGIN_API_VERSION,
   PLUGIN_FILES,
   PLUGIN_ID_PATTERN,
+  SOCKET_ALLOW_PATTERN,
   type PluginPreview,
   type RemoveResult,
   pluginScriptName,
@@ -73,6 +74,9 @@ export const ManifestSchema = Schema.Struct({
   description: Schema.String,
   author: Schema.optionalKey(Schema.String),
   api: Schema.Number,
+  sockets: Schema.optionalKey(
+    Schema.Array(Schema.String.check(Schema.isPattern(SOCKET_ALLOW_PATTERN))),
+  ),
 });
 
 export const LockfileSchema = Schema.Struct({
@@ -267,6 +271,7 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
     const manifest = decoded.success;
     const described: InstalledPlugin = {
       ...base,
+      ...(manifest.sockets === undefined ? {} : { sockets: manifest.sockets }),
       name: manifest.name,
       description: manifest.description,
       version: manifest.version,
