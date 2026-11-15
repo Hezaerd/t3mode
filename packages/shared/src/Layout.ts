@@ -40,12 +40,25 @@ export interface HomeLayout {
   readonly mainLog: string;
   readonly shimLog: string;
   readonly safeMode: string;
+  /** Present once T3 Mode has added its shortcut to T3 Code's keybindings.json. */
+  readonly shortcutSeeded: string;
 }
 
 export const resolveHomeRoot = (
   env: Readonly<Record<string, string | undefined>>,
   appData: string,
 ): string => env[HOME_ENV]?.trim() || NodePath.join(appData, "t3mode");
+
+/** T3 Code's keybindings file: `<T3CODE_HOME or ~/.t3>/userdata/keybindings.json`. */
+export const t3KeybindingsPath = (
+  env: Readonly<Record<string, string | undefined>>,
+  homeDirectory: string,
+): string =>
+  NodePath.join(
+    env["T3CODE_HOME"]?.trim() || NodePath.join(homeDirectory, ".t3"),
+    "userdata",
+    "keybindings.json",
+  );
 
 export const homeLayout = (root: string): HomeLayout => {
   const dist = NodePath.join(root, "dist");
@@ -62,5 +75,6 @@ export const homeLayout = (root: string): HomeLayout => {
     mainLog: NodePath.join(logs, "main.log"),
     shimLog: NodePath.join(logs, "shim.log"),
     safeMode: NodePath.join(root, "SAFE_MODE"),
+    shortcutSeeded: NodePath.join(root, "shortcut-seeded"),
   };
 };

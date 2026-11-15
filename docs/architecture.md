@@ -1,15 +1,12 @@
 # t3mode architecture
 
-Status: **M1 done** (shim, loader, preload, test badge, CLI), verified on a sandbox copy of T3 Code `0.1.10-nightly.20261114.4669`. Decisions are recorded under **Decided**.
+Status: **M2 done** (loader, CLI, page runtime, settings pages and the shortcut), verified on a sandbox copy of T3 Code `0.1.10-nightly.20261114.4669`. Decisions are recorded under **Decided**.
 
 ## Goal
 
 t3mode adds plugins to the T3 Code desktop app on Windows, the way Vencord does for Discord. T3 Code's own code is never edited. t3mode runs alongside it at startup and changes the interface from inside the window.
 
-First plugins, the reason this project exists:
-
-- **Thread details collapsed by default.** The card starts closed and still opens when clicked.
-- **Weekly usage near the composer.** A copy of the weekly usage indicator sits next to the composer.
+The repo ships the loader, the runtime and the settings pages. Plugins are personal and stay out of the repo (see Plugins below).
 
 Non-goals for v1: macOS support, loading third-party plugins at runtime, computer control, dictation, storing secrets.
 
@@ -103,32 +100,49 @@ Everything here runs **synchronously** (`Effect.runSync` over sync file access),
 
 ### 4. Runtime (`packages/runtime`)
 
-Runs in the page.
+Runs in the page, as one classic script with no imports. Plain TypeScript, no Effect: it is small, runs once per page load, and Effect would add about 100 kB to a script that the preload hands to `executeJavaScript` on every reload.
 
-- Starts and stops plugins and keeps settings in memory.
-- **Disposables.** Everything a plugin creates (CSS, observers, listeners, DOM nodes, timers) is registered with its API and undone in reverse order when the plugin stops.
-- **Fault isolation covers sync and async errors.** API callbacks are wrapped, `api.async()` attributes rejected promises to the plugin, and the runtime watches `unhandledrejection`. A plugin that fails is stopped, its changes are undone and a toast reports it. t3mod only isolates sync errors.
-- **Compatibility gate.** Each plugin declares the selectors it needs. If they aren't found within a timeout, the plugin is marked _incompatible with T3 Code vX_, not left half-applied.
-- **Settings page.** Adds a "t3mode" entry to T3 Code's settings navigation, plus a hotkey fallback (Ctrl+Alt+M) in case injection fails.
-- **Hot reload.** `renderer.js` is re-read on each page reload, so `pnpm dev` only needs Ctrl+R.
+- `renderer.ts` reads `info` and settings from main, starts the `Runtime`, adds the settings entry and the shortcut, then calls `ready()` so the crash guard counts the launch as healthy.
+- `Runtime` starts and stops plugins and keeps settings in memory. Each change is written back through `writeSettings`, which validates it with a Schema in main before it reaches `settings.json`.
+- **Disposables.** Everything a plugin creates goes through its API (`css`, `observe`, `listen`, `interval`, `element`, `onCleanup`) and is undone newest first when the plugin stops. Changing an option restarts the plugin.
+- **Fault isolation (sync only in v1).** `start` and every API callback are wrapped. A plugin that throws is stopped, its changes are undone, the error goes to `main.log` and a toast points to the settings page, where Retry starts it again. Errors in a plugin's own promises are not attributed yet.
+- **Status.** Plugins call `api.report({ state: "active" | "waiting", detail })`. The settings page shows it, so "T3 Code's usage data was not found" after an update is visible instead of a silent no-op.
+- **Settings pages** (`ui/settingsPage.ts`, `ui/native.ts`). A "T3 Mode" group is added to T3 Code's settings navigation, after "Connections": a copy of that native group with two entries, like Vencord's. **T3 Mode** shows the version and troubleshooting (logs folder, safe mode, uninstall). **Plugins** lists the plugins as cards (switch, status, search and an enabled/disabled filter), and each plugin has its own page for its options (Settings / Plugins / name). The pages open in the settings pane itself, with T3 Code's breadcrumb header.
+- **Shortcut** (`ui/shortcut.ts`, `lib/keybindings.ts`, main's `T3Keybindings.ts`). Ctrl+Alt+M (Cmd+Alt+M on macOS) opens the Plugins page. It is listed and rebindable in T3 Code's own Settings → Keybindings, as "Run Script: T3 Mode Plugins" with a "T3 Mode" badge.
+  - **Why a script command.** T3 Code's keybindings file only accepts its own commands, plus `script.<id>.run` for project scripts, whose ids are free. So t3mode adds `{ "key": "mod+alt+m", "command": "script.t3-mode-plugins.run" }` to `<T3 Code home>/userdata/keybindings.json`. T3 Code shows that entry in Settings → Keybindings and lets the user rebind it there, and it ignores the key press, because no project has that script.
+  - **Seeded once.** Main adds the entry on the first start, with an atomic write, and leaves a marker (`shortcut-seeded`). It never edits or removes the user's entries. If the user deletes the binding, it stays deleted, and the T3 Mode page offers a Restore button. If Ctrl+Alt+M is already bound to something else, nothing is added. T3 Code reloads the file on its own, so changes apply without a restart.
+  - **Handling the key.** The page listens for key presses before T3 Code does. It resolves each press against T3 Code's live bindings, read from React state, the way T3 Code does: same "When" clauses, and the last matching rule wins. A rebind applies at once and the old key stops working. If those bindings can't be read after an update, it falls back to Ctrl+Alt+M and logs a warning.
+  - **Native look.** T3 Code's stylesheet only holds the Tailwind classes T3 Code uses, so `native.ts` copies whole class strings from T3 Code's live settings components (group, row, switch, select, buttons, header) and rebuilds their markup. t3mode's own layout (the card grid, status dots) is plain CSS on T3 Code's theme variables.
+  - **No React nodes touched.** The page is appended as the pane's last child, and React's children are hidden with CSS while it is open. Clicking a native section, typing in the settings search or a route change closes it. While it's open, t3mode's entry is marked active and the native one inactive; the native one is restored when the page closes.
+  - **Popups stay in the dialog.** Select popups open inside the page, not in `document.body`, because T3 Code's dialog closes on presses outside itself. Escape in a popup closes only the popup.
+- **Plugin storage.** `api.storage` is per-plugin `localStorage` (`t3mode:<id>:<key>`), for state that is not a setting.
+- **Hot reload.** `renderer.js` is re-read on each page reload, so `pnpm t3mode deploy` then Ctrl+R picks up page changes. Main and preload changes need a restart.
 
-### 5. Plugins (`packages/plugins/<id>`)
+### 5. Plugins (`packages/runtime/src/plugins`)
+
+Plugins are compiled into `renderer.js`; nothing is loaded at runtime, so there's no remote code.
+
+**Decided: user plugins, like Vencord's `userplugins`.** Plugins are personal, so the repo ships none. Each one lives in `packages/runtime/src/userplugins/`, which git ignores except for its README, as a file (`name.ts`) or a folder (`name/index.ts`) whose default export is a `definePlugin(...)`. `plugins/index.ts` collects them with `import.meta.glob`, which the bundler and the test runner resolve at build time, so a fresh clone builds with no plugins and the Plugins page says where to add one. A plugin keeps its own selectors, newest markup first, and uses `queryFirst` from `dom.ts`.
 
 ```ts
 export default definePlugin({
-  id: "thread-details-collapsed",
-  name: "Thread details collapsed by default",
-  requires: [sel.threadDetailsCard],
-  options: { rememberManualOpen: { type: "boolean", default: true } },
+  id: "my-plugin",
+  name: "My plugin",
+  description: "…",
+  enabledByDefault: true,
+  options: {
+    mode: { type: "select", label: "Mode", choices: [/* … */], default: "a" },
+  },
   start(api) {
-    /* … */
+    api.observe(() => {
+      /* … */
+    });
   },
 });
 ```
 
-- Compiled into `renderer.js`. Nothing is loaded at runtime, so there's no remote code.
-- Plugins reach T3 Code only through the API and the shared `selectors.ts`.
-- **Rules.** Drive T3 Code's own controls with `.click()` instead of rebuilding them. Never move React-owned nodes: copy their content, or add next to them. Re-apply whenever the DOM changes, because React replaces nodes.
+- **Rules.** Drive T3 Code's own controls with `.click()` instead of rebuilding them. Never insert into or move React-owned nodes: overlay with `position: fixed`, or add next to React's children. Re-apply whenever the DOM changes, because React replaces nodes.
+- **Reading React state.** `lib/react.ts` reads the fiber React attaches to DOM nodes (`__reactFiber$…`). Component names are minified, so lookups match on the shape of the data: `findPropsUp` walks ancestors for props that pass a test, and `findHookState` walks the tree for hook state that passes a type guard. Either returns undefined when the shape changed, and the plugin reports "waiting".
 
 ### 6. CLI (`packages/cli`)
 
@@ -177,9 +191,8 @@ t3mode/
     shim/        app.asar entry -> dist/index.cjs
     main/        loader: safe mode, IPC, preload hook, file log -> dist/main.cjs   (updates: M3)
     preload/     bridge and injection -> dist/preload.cjs
-    runtime/     page code -> dist/renderer.iife.js   (plugin runtime and settings page: M2)
+    runtime/     page code -> dist/renderer.iife.js: plugin runtime, settings page, plugins/
     cli/         install, repair, uninstall, deploy, status, safe, sandbox (run from source)
-    plugins/     (M2) one folder per plugin, plus selectors.ts
   docs/
   .sandbox/      dev copy of T3 Code (git-ignored)
 ```
@@ -191,25 +204,32 @@ t3mode/
 - **effect-tsgo** typechecks with T3 Code's Effect language-service rules (`tsconfig.effect.json`, copied).
 - **vite-plus 1.4.0** (`vp`): `vp pack` (tsdown) bundles each layer, `vp test` (vitest), `vp lint` (oxlint), `vp fmt` (oxfmt).
 - pnpm 12 workspaces with a catalog pinned to T3 Code's versions.
-- No Effect in the shim (it must never fail) or the preload (sandboxed and tiny). Whether the page runtime uses Effect is decided in M2.
+- No Effect in the shim (it must never fail), the preload (sandboxed and tiny) or the page runtime (see Runtime above).
 
 ## Testing
 
-- **Unit (vitest).** Now: safe-mode decisions, and the asar swap on a fake install (install, refresh, re-apply after an update, uninstall, refusing another mod). Later: runtime lifecycle and disposables, settings migrations, update helper state machine.
-- **Sandbox.** `pnpm t3mode sandbox`, then DevTools on port 9333. M1 was verified there: badge injected, `desktopBridge` intact, a crashing loader still lets T3 Code boot (error in `shim.log`), `safe` skips one launch, `uninstall` restores the original.
+- **Unit (vitest).** Now: safe-mode decisions; the asar swap on a fake install (install, refresh, re-apply after an update, uninstall, refusing another mod); option validation, thread keys, and keybinding matching (key names, "When" clauses, last rule wins, finding the default key in the file). Later: runtime lifecycle and disposables, settings migrations, update helper state machine.
+- **Sandbox.** `pnpm t3mode sandbox`, then DevTools on port 9333. M1 was verified there: badge injected, `desktopBridge` intact, a crashing loader still lets T3 Code boot (error in `shim.log`), `safe` skips one launch, `uninstall` restores the original. M2 was verified there too: plugins found in `userplugins/` and none on a clean clone, settings and options persist, turning a plugin off removes everything it added, and the shortcut is added once, can be rebound in Settings → Keybindings, and can be restored after it's deleted.
 - **DOM (vitest + happy-dom).** Plugins against saved HTML snapshots of T3 Code screens.
-- **Compat canary (later).** A scheduled job pulls the latest nightly, extracts `app.asar`, runs `doctor` checks, and checks each plugin's `requires` selectors against the real UI. Then breakage shows up in CI before it shows up on the desktop.
+- **Compat canary (later).** A scheduled job pulls the latest nightly, extracts `app.asar`, runs `doctor` checks, and checks the selectors that plugins use against the real UI. Then breakage shows up in CI before it shows up on the desktop.
 
 ## Milestones
 
 1. **M0.** Repo and this design. ✔
 2. **M1.** Shim, loader, crash guard, logs, CLI `install` / `uninstall` / `repair` / `status`, and a "hello" plugin (a badge in the corner). ✔ Proven on a sandbox copy of the real app.
-3. **M2.** Runtime, plugin API, settings page, then the two real plugins. ← next
-4. **M3.** Update handling (option A). Until then, every T3 Code update removes the shim: run `pnpm t3mode repair`.
+3. **M2.** Runtime, plugin API, settings pages, shortcut, user plugins. ✔ Proven on the sandbox.
+4. **M3.** Update handling (option A). ← next Until then, every T3 Code update removes the shim: run `pnpm t3mode repair`.
 5. **M4.** Doctor, compat canary, DOM snapshot tests.
+6. **Later: patch engine** (see below).
+
+## Later: patch engine
+
+This would be Vencord-style find-and-replace on T3 Code's own code, for changes the DOM and React state can't make. One example is a real `t3mode.*` keybinding command instead of the script workaround. It is not planned yet; the notes below record what's known.
+
+- **UI bundles.** T3 Code's main process serves the web client from `server.asar/apps/server/dist/client` through `electron.protocol.handle`. The loader runs before T3 Code's main, so it could wrap `protocol.handle` and patch matching JS responses in memory, without touching files on disk.
+- **Server.** The server is a separate process: T3 Code's exe with `ELECTRON_RUN_AS_NODE=1`, entry `server.asar/apps/server/dist/bin.mjs`. Keybinding validation lives there, so patching it means either patching `server.asar` on disk, which every update undoes, or a `--require` / `NODE_OPTIONS` hook. Whether the fuses allow that hook hasn't been checked. In WSL mode the server runs under `wsl.exe` and can't be hooked from the loader.
+- **Fragility.** Patches would be regexes against minified code that changes every nightly. Each patch needs a "find" that fails loudly and is skipped, like a plugin's "waiting" status. The compat canary (M4) should run every patch against each new nightly.
 
 ## Open questions
 
 Settled: written from scratch (t3mod only informs the design), and for personal use, installed from the repo.
-
-- **Weekly usage data.** Copy it from the DOM (v1), or read it from `desktopBridge` or T3 Code's server connection if that data is exposed there?

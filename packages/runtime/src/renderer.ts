@@ -1,50 +1,56 @@
-// Milestone 1 renderer: proves injection end to end with a small badge, then reports ready.
-// The plugin runtime replaces this in milestone 2.
+// Page entry, run by the preload in T3 Code's main window: reads settings, starts the plugins,
+// adds the settings entry and hotkey, then tells the main process this launch is healthy.
 import type { NativeBridge } from "@t3mode/shared/Ipc";
+
+import { plugins } from "./plugins/index.ts";
+import { Runtime } from "./Runtime.ts";
+import { SettingsPage } from "./ui/settingsPage.ts";
+import { installShortcut } from "./ui/shortcut.ts";
+import { toast } from "./ui/toast.ts";
 
 declare global {
   interface Window {
     readonly t3modeNative?: NativeBridge;
-    __t3modeRenderer?: boolean;
+    __t3modeRuntime?: Runtime;
   }
 }
 
-const BADGE_ATTRIBUTE = "data-t3mode-badge";
-
-const showBadge = (text: string): void => {
-  document.querySelector(`[${BADGE_ATTRIBUTE}]`)?.remove();
-  const badge = document.createElement("div");
-  badge.setAttribute(BADGE_ATTRIBUTE, "");
-  badge.textContent = text;
-  Object.assign(badge.style, {
-    position: "fixed",
-    right: "12px",
-    bottom: "12px",
-    zIndex: "2147483647",
-    padding: "2px 8px",
-    borderRadius: "999px",
-    font: "600 11px/18px system-ui, sans-serif",
-    color: "#fff",
-    background: "rgba(124, 58, 237, 0.85)",
-    pointerEvents: "none",
-  });
-  document.body.append(badge);
-};
+const describe = (error: unknown) =>
+  error instanceof Error ? (error.stack ?? error.message) : String(error);
 
 const main = async (): Promise<void> => {
   const native = window.t3modeNative;
-  if (!native || window.__t3modeRenderer) return;
-  window.__t3modeRenderer = true;
+  if (!native || window.__t3modeRuntime) return;
   try {
-    const info = await native.info();
-    showBadge(`t3mode ${info.t3modeVersion}`);
+    const [info, settings] = await Promise.all([native.info(), native.readSettings()]);
+    const runtime = new Runtime(native, plugins, settings, info);
+    window.__t3modeRuntime = runtime;
+    runtime.startAll();
+    const page = new SettingsPage(runtime);
+
+    installShortcut(runtime, page);
+    let frame = 0;
+    const sync = () => {
+      frame = 0;
+      try {
+        page.sync();
+      } catch (error) {
+        runtime.log("warn", `Settings page failed: ${describe(error)}`);
+      }
+    };
+    new MutationObserver(() => {
+      if (frame === 0) frame = requestAnimationFrame(sync);
+    }).observe(document.body, { childList: true, subtree: true });
+    sync();
+
     await native.ready();
-    await native.log("info", `Renderer started on T3 Code ${info.t3codeVersion}`);
-  } catch (error) {
     await native.log(
-      "error",
-      `Renderer failed: ${error instanceof Error ? error.stack : String(error)}`,
+      "info",
+      `Runtime started on T3 Code ${info.t3codeVersion} with ${plugins.length} plugin${plugins.length === 1 ? "" : "s"}`,
     );
+  } catch (error) {
+    await native.log("error", `Runtime failed to start: ${describe(error)}`).catch(() => undefined);
+    toast("T3 Mode failed to start. See its log in the logs folder.", "error");
   }
 };
 

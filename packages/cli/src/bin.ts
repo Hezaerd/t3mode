@@ -196,12 +196,21 @@ const sandbox = Command.make(
 
     if (!options.launch) return;
     // T3 Code's own data goes to the sandbox too, so the copy never touches the real profile or ~/.t3.
-    yield* Processes.launch(t.exe, [`--remote-debugging-port=${options.port}`], {
+    // Keep rendering while another window covers the sandbox, so DevTools sees live updates.
+    const args = [
+      `--remote-debugging-port=${options.port}`,
+      "--disable-features=CalculateNativeWinOcclusion",
+      "--disable-renderer-backgrounding",
+      "--disable-background-timer-throttling",
+    ];
+    yield* Processes.launch(t.exe, args, {
       [HOME_ENV]: t.home.root,
       [SANDBOX_APPDATA_ENV]: path.join(dir, "appdata"),
       // Also set here, so the sandbox stays isolated even when the loader fails to start.
       APPDATA: path.join(dir, "appdata"),
       T3CODE_HOME: path.join(dir, "t3home"),
+      // An update installed from the sandbox would target the real install folder.
+      T3CODE_DISABLE_AUTO_UPDATE: "1",
     });
     yield* Console.log(`Sandbox started. DevTools: http://127.0.0.1:${options.port}/json`);
   }),

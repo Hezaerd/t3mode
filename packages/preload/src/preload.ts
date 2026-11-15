@@ -10,6 +10,8 @@ import {
   type NativeBridge,
   isMainWindowUrl,
 } from "@t3mode/shared/Ipc";
+import type { Settings } from "@t3mode/shared/Settings";
+import type { ShortcutAction, ShortcutStatus } from "@t3mode/shared/Shortcut";
 
 const GUARD = "__t3modePreloaded";
 
@@ -22,6 +24,11 @@ const start = (): void => {
     log: (level: LogLevel, message: string) => ipcRenderer.invoke(Channel.log, level, message),
     ready: () => ipcRenderer.invoke(Channel.ready),
     info: () => ipcRenderer.invoke(Channel.info) as Promise<Info>,
+    readSettings: () => ipcRenderer.invoke(Channel.readSettings) as Promise<Settings>,
+    writeSettings: (settings: Settings) => ipcRenderer.invoke(Channel.writeSettings, settings),
+    openLogs: () => ipcRenderer.invoke(Channel.openLogs),
+    shortcut: (action: ShortcutAction) =>
+      ipcRenderer.invoke(Channel.shortcut, action) as Promise<ShortcutStatus>,
   };
   contextBridge.exposeInMainWorld("t3modeNative", bridge);
 
