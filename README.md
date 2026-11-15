@@ -1,6 +1,6 @@
 # t3mode
 
-t3mode adds plugins to the [T3 Code](https://github.com/pingdotgg/t3code) desktop app on Windows, the way Vencord does for Discord. It doesn't edit T3 Code's code. A small loader runs first at startup, and then it starts the real app.
+t3mode adds plugins to the [T3 Code](https://github.com/pingdotgg/t3code) desktop app on Windows. It doesn't edit T3 Code's code. A small loader runs first at startup, and then it starts the real app.
 
 t3mode is a community project. The T3 Code team doesn't make or support it, so report t3mode problems here, not to T3 Code.
 
