@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { app, ipcMain, type IpcMainInvokeEvent } from "electron";
+import { app, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
 
 import { Channel, type Info, isMainWindowUrl } from "@t3mode/shared/Ipc";
 import { T3MODE_VERSION } from "@t3mode/shared/Version";
@@ -11,6 +11,8 @@ import { T3MODE_VERSION } from "@t3mode/shared/Version";
 import { BootGuard } from "./BootGuard.ts";
 import { Files } from "./Files.ts";
 import { Home } from "./Home.ts";
+import { SettingsStore } from "./SettingsStore.ts";
+import { ShortcutActionSchema, T3Keybindings } from "./T3Keybindings.ts";
 
 export class IpcRefusedError extends Schema.TaggedError<IpcRefusedError>()("IpcRefusedError", {
   channel: Schema.String,
@@ -20,6 +22,24 @@ export class IpcRefusedError extends Schema.TaggedError<IpcRefusedError>()("IpcR
     return `t3mode refused ${this.channel} from ${this.url || "an unknown frame"}.`;
   }
 }
+
+export class OpenPathError extends Schema.TaggedError<OpenPathError>()("OpenPathError", {
+  path: Schema.String,
+  reason: Schema.String,
+}) {
+  override get message(): string {
+    return `Could not open ${this.path}: ${this.reason}`;
+  }
+}
+
+const openPath = Effect.fn("Ipc.openPath")(function* (path: string) {
+  // Electron resolves with an error message, or "" on success.
+  const reason = yield* Effect.tryPromise({
+    try: () => shell.openPath(path),
+    catch: (cause) => new OpenPathError({ path, reason: String(cause) }),
+  });
+  if (reason !== "") return yield* new OpenPathError({ path, reason });
+});
 
 const LogArgs = Schema.Tuple([Schema.Literals(["debug", "info", "warn", "error"]), Schema.String]);
 
@@ -49,6 +69,8 @@ export const register = Effect.fn("Ipc.register")(function* (options: {
 }) {
   const files = yield* Files;
   const guard = yield* BootGuard;
+  const settings = yield* SettingsStore;
+  const keybindings = yield* T3Keybindings;
   const { layout } = yield* Home;
   const run = Effect.runPromiseWith(yield* Effect.context<never>());
 
@@ -80,11 +102,20 @@ export const register = Effect.fn("Ipc.register")(function* (options: {
     handle(Channel.ready, () =>
       guard.markHealthy.pipe(Effect.andThen(Effect.logInfo("Renderer ready"))),
     );
+    handle(Channel.readSettings, () => settings.read);
+    handle(Channel.writeSettings, (args) => settings.write(args[0]));
+    handle(Channel.openLogs, () => openPath(layout.logs));
+    handle(Channel.shortcut, (args) =>
+      Schema.decodeUnknownEffect(ShortcutActionSchema)(args[0]).pipe(
+        Effect.flatMap(keybindings.shortcut),
+      ),
+    );
     handle(Channel.info, () =>
       Effect.succeed<Info>({
         t3modeVersion: T3MODE_VERSION,
         t3codeVersion: app.getVersion(),
         home: layout.root,
+        logs: layout.logs,
         safeMode: options.safeMode,
       }),
     );

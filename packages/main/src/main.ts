@@ -14,6 +14,8 @@ import * as Files from "./Files.ts";
 import * as Home from "./Home.ts";
 import * as Ipc from "./Ipc.ts";
 import * as Preload from "./Preload.ts";
+import * as SettingsStore from "./SettingsStore.ts";
+import * as T3Keybindings from "./T3Keybindings.ts";
 
 /**
  * Dev sandbox (`pnpm t3mode sandbox`): send T3 Code's own data to a throwaway folder, so the
@@ -49,7 +51,7 @@ const program = Effect.gen(function* () {
   yield* guard.watchCrashes;
 });
 
-const MainLayer = BootGuard.layer.pipe(
+const MainLayer = Layer.mergeAll(BootGuard.layer, SettingsStore.layer, T3Keybindings.layer).pipe(
   Layer.provideMerge(FileLogger.layer),
   Layer.provideMerge(Layer.mergeAll(Files.layer, Home.layer)),
 );
