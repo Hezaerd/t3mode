@@ -65,8 +65,10 @@ To give updates back to T3 Code, turn off **Install updates through T3 Mode**. A
 ## If something breaks
 
 - `pnpm t3mode safe` makes the next T3 Code launch skip t3mode and its plugins. The launch after that loads them again.
-- `pnpm t3mode uninstall` restores the original T3 Code. Add `--purge` to also delete t3mode's data in `%APPDATA%\t3mode`.
-- Logs are in `%APPDATA%\t3mode\logs`.
+- `pnpm t3mode uninstall` restores the original T3 Code. Add `--purge` to also delete t3mode's data folder.
+- Logs are in the `logs` folder of t3mode's data folder.
+
+t3mode's data folder is `%USERPROFILE%\.t3\t3mode`. If you set `T3CODE_HOME`, it is `<T3CODE_HOME>\t3mode`. To use another folder, set `T3MODE_HOME`.
 
 To report a bug, [open an issue](https://github.com/Hezaerd/t3mode/issues) with the output of `pnpm t3mode status`.
 
