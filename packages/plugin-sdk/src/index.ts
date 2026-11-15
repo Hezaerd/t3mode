@@ -50,7 +50,7 @@ export interface PluginApi<O extends OptionsSpec = OptionsSpec> {
   /** Creates an element owned by the plugin. It is removed when the plugin stops. */
   readonly element: <K extends keyof HTMLElementTagNameMap>(tag: K) => HTMLElementTagNameMap[K];
   readonly onCleanup: (cleanup: () => void) => void;
-  /** JSON in localStorage, namespaced to the plugin. Lives as long as T3 Code's own UI state. */
+  /** JSON in <home>/plugin-data/<id>.json. Deleted when the plugin is removed or uninstall --purge runs. */
   readonly storage: {
     readonly get: <T>(key: string, fallback: T) => T;
     readonly set: (key: string, value: unknown) => void;

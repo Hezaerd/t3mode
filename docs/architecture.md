@@ -47,7 +47,7 @@ flowchart LR
   subgraph Data["~/.t3/t3mode"]
     DIST["dist/ main.js, preload.js, renderer.js"]
     CFG["settings.json, state.json, logs/"]
-    PLG["plugins.json, plugins/"]
+    PLG["plugins.json, plugins/, plugin-data/"]
   end
   subgraph Main["Electron main process"]
     LOADER["loader (main.js)"]
@@ -123,7 +123,7 @@ Runs in the page, as one classic script with no imports. Plain TypeScript, no Ef
   - **Native look.** T3 Code's stylesheet only holds the Tailwind classes T3 Code uses, so `native.ts` copies whole class strings from T3 Code's live settings components (group, row, switch, select, buttons, header) and rebuilds their markup. t3mode's own layout (the card grid, status dots) is plain CSS on T3 Code's theme variables.
   - **No React nodes touched.** The page is appended as the pane's last child, and React's children are hidden with CSS while it is open. Clicking a native section, typing in the settings search or a route change closes it. While it's open, t3mode's entry is marked active and the native one inactive; the native one is restored when the page closes.
   - **Popups stay in the dialog.** Select popups open inside the page, not in `document.body`, because T3 Code's dialog closes on presses outside itself. Escape in a popup closes only the popup.
-- **Plugin storage.** `api.storage` is per-plugin `localStorage` (`t3mode:<id>:<key>`), for state that is not a setting.
+- **Plugin storage.** `api.storage` keeps state in `<home>/plugin-data/<id>.json`, including for linked plugins. Reads use an in-memory startup snapshot. Writes update memory immediately and coalesce background file writes per plugin. Install and update preserve the file. Removing the plugin deletes it. `uninstall --purge` deletes it with the whole home. Existing localStorage data is not migrated.
 - **Hot reload.** `renderer.js` is re-read on each page reload, so `pnpm t3mode deploy` then Ctrl+R picks up page changes. Main and preload changes need a restart.
 
 ### 5. Plugins (`packages/plugin-sdk`, `packages/shared/src/Plugin*.ts`)
