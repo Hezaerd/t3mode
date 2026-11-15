@@ -1,6 +1,6 @@
 # t3mode architecture
 
-Status: **M3 done** (loader, CLI, page runtime, settings pages, shortcut, and t3mode installing T3 Code's updates), verified on a sandbox copy of T3 Code `0.1.10-nightly.20261114.4669`, and the update path also on a real install. Standalone plugins (section 5) are built and unit-tested, and not yet verified on the sandbox. Decisions are recorded under **Decided**.
+Status: **M3 done** (loader, CLI, page runtime, settings pages, shortcut, and t3mode installing T3 Code's updates), verified on a sandbox copy of T3 Code `0.1.10-nightly.20261114.4669`, and the update path also on a real install. Standalone plugins (section 5) are verified on a sandbox copy of `0.1.10-nightly.20261115.4736`. Decisions are recorded under **Decided**.
 
 ## Goal
 
@@ -111,7 +111,7 @@ Runs in the page, as one classic script with no imports. Plain TypeScript, no Ef
 - `renderer.ts` reads `info` and settings from main, starts the `Runtime`, adds the settings entry and the shortcut, then calls `ready()` so the crash guard counts the launch as healthy.
 - `Runtime` starts and stops plugins and keeps settings in memory. Each change is written back through `writeSettings`, which validates it with a Schema in main before it reaches `settings.json`.
 - **Disposables.** Everything a plugin creates goes through its API (`css`, `observe`, `listen`, `interval`, `element`, `onCleanup`) and is undone newest first when the plugin stops. Changing an option restarts the plugin.
-- **Fault isolation (sync only in v1).** `start` and every API callback are wrapped. A plugin that throws is stopped, its changes are undone, the error goes to `main.log` and a toast points to the settings page, where Retry starts it again. Errors in a plugin's own promises are not attributed yet.
+- **Fault isolation (sync only in v1).** `start` and every API callback are wrapped. A plugin that throws is stopped, its changes are undone, the error goes to `main.log` and a toast points to the settings page, where Retry starts it again. For a plugin that couldn't load, Retry first reads its files again, so a fixed linked plugin starts without a reload. Errors in a plugin's own promises are not attributed yet.
 - **Status.** Plugins call `api.report({ state: "active" | "waiting", detail })`. The settings page shows it, so "T3 Code's usage data was not found" after an update is visible instead of a silent no-op.
 - **Settings pages** (`ui/settingsPage.ts`, `ui/native.ts`). A "T3 Mode" group is added to T3 Code's settings navigation, after "Connections": a copy of that native group with two entries, like Vencord's. **T3 Mode** shows the version and troubleshooting (logs folder, safe mode, uninstall). **Plugins** has an "Install from GitHub" field and "Check for updates", and lists the installed plugins as cards (switch, status, version and source, search and an enabled/disabled filter). Each plugin has its own page for its options, its source, Update and Remove (Settings / Plugins / name). The pages open in the settings pane itself, with T3 Code's breadcrumb header.
 - **Shortcut** (`ui/shortcut.ts`, `lib/keybindings.ts`, main's `T3Keybindings.ts`). Ctrl+Alt+M (Cmd+Alt+M on macOS) opens the Plugins page. It is listed and rebindable in T3 Code's own Settings → Keybindings, as "Run Script: T3 Mode Plugins" with a "T3 Mode" badge.
@@ -286,6 +286,13 @@ t3mode/
 
 - **Unit (vitest).** Now: safe-mode decisions; the asar swap on a fake install (install, refresh, re-apply after an update, uninstall, refusing another mod); option validation, thread keys, keybinding matching (key names, "When" clauses, last rule wins, finding the default key in the file), the settings schema, and the update feed (version order, `app-update.yml` and `<channel>.yml`, picking the release and installer, the signature decision, quoting the helper's command line). For plugins: parsing GitHub links, release URLs and the code wrapper (run in `node:vm`); `PluginStore` end to end against a local HTTP server standing in for GitHub (install, idempotence, the refusals, the hash check, link, remove, update checks); and main's decode, which refuses a local source from page code. Later: runtime lifecycle and disposables, settings migrations.
 - **Sandbox.** `pnpm t3mode sandbox`, then DevTools on port 9333. M1 was verified there: badge injected, `desktopBridge` intact, a crashing loader still lets T3 Code boot (error in `shim.log`), `safe` skips one launch, `uninstall` restores the original. M2 was verified there too: plugins found in `userplugins/` and none on a clean clone, settings and options persist, turning a plugin off removes everything it added, and the shortcut is added once, can be rebound in Settings → Keybindings, and can be restored after it's deleted. M3 was verified there: the real nightly feed found `0.1.10-nightly.20261114.4709`, its 372 MB installer downloaded with live progress and passed SHA-512 and signature checks; "Restart now" and a plain quit both ran the helper, the stand-in installer replaced the shim, `repair.cjs` under T3 Code's exe put it back, and after "Restart now" T3 Code started again with its arguments and t3mode loaded. Turning the setting off and on applies at the next launch.
+  Standalone plugins were verified there with three linked plugins and a stand-in GitHub (`T3MODE_GITHUB_URL`).
+  - A plugin that doesn't parse is logged and skipped, and one whose top level throws shows "Can't load" with the error. The others and the runtime still start.
+  - Installing `acme/example-plugin` from the Plugins page showed the prompt, downloaded both files through `net.fetch`, wrote `plugins.json` and started the plugin without a reload.
+  - "Check for updates" found 1.1.0, and "Update to 1.1.0" swapped in the new code and removed the old code's stylesheet.
+  - After a reload, the installed copy loaded from disk. After its `plugin.js` was edited, it was refused as changed since install.
+  - Retry re-read a linked plugin that had been fixed on disk and started it. Remove deleted the files, the lockfile entry and everything the plugin added.
+  - Against the real `https://github.com`, a repo whose release has no `manifest.json` and a missing repo both got a message, and main refused a local source sent from page code.
 - **Real install.** On the real T3 Code install, the helper ran T3 Code's own installer and put the shim back, and T3 Code started with t3mode loaded. `pnpm t3mode status` shows the helper's log after each update.
 - **DOM (vitest + happy-dom).** Plugins against saved HTML snapshots of T3 Code screens.
 - **Compat canary (later).** A scheduled job pulls the latest nightly, extracts `app.asar`, runs `doctor` checks, and checks the selectors that plugins use against the real UI. Then breakage shows up in CI before it shows up on the desktop.
@@ -296,7 +303,7 @@ t3mode/
 2. **M1.** Shim, loader, crash guard, logs, CLI `install` / `uninstall` / `repair` / `status`, and a "hello" plugin (a badge in the corner). ✔ Proven on a sandbox copy of the real app.
 3. **M2.** Runtime, plugin API, settings pages, shortcut, user plugins. ✔ Proven on the sandbox.
 4. **M3.** Update handling (option A). ✔ Proven on the sandbox and on a real install.
-5. **Standalone plugins.** The plugin SDK, `plugins.json`, install from GitHub, `plugin link`, and the plugin template. ← in progress
+5. **Standalone plugins.** The plugin SDK, `plugins.json`, install from GitHub, `plugin link`, and the plugin template. ✔ Proven on the sandbox, with a stand-in for GitHub's release downloads.
 6. **M4.** Doctor, compat canary, DOM snapshot tests. ← next
 7. **Later: patch engine** (see below).
 
