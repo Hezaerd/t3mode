@@ -1,0 +1,3 @@
+interface:
+  display_name: "verify-asar-swap"
+  short_description: "Check app.asar swap changes against the TLA+ model"
