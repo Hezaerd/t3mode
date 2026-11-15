@@ -1,0 +1,217 @@
+// `pnpm t3mode <command>`: install, repair, uninstall, deploy, status, safe, sandbox.
+import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Console from "effect/Console";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import { Command, Flag } from "effect/cli";
+
+import { HOME_ENV, SANDBOX_APPDATA_ENV } from "@t3mode/shared/Layout";
+import { T3MODE_VERSION } from "@t3mode/shared/Version";
+
+import * as Artifacts from "./Artifacts.ts";
+import * as AsarArchive from "./Asar.ts";
+import * as Install from "./Install.ts";
+import * as Processes from "./Processes.ts";
+import * as Target from "./Target.ts";
+
+const root = Command.make("t3mode").pipe(
+  Command.withSharedFlags({
+    installDir: Flag.Directory("install-dir").pipe(
+      Flag.withDescription("T3 Code install folder (default: %LOCALAPPDATA%\\Programs\\t3code)"),
+      Flag.optional,
+    ),
+    home: Flag.Directory("home").pipe(
+      Flag.withDescription(`t3mode data folder (default: $${HOME_ENV} or %APPDATA%\\t3mode)`),
+      Flag.optional,
+    ),
+  }),
+  Command.withDescription("Plugins for the T3 Code desktop app"),
+);
+
+const target = Effect.gen(function* () {
+  return yield* Target.resolve(yield* root);
+});
+
+const wait = Flag.Boolean("wait").pipe(
+  Flag.withDescription("Wait for T3 Code to close instead of failing"),
+  Flag.withDefault(false),
+);
+const launchAfter = Flag.Boolean("launch").pipe(
+  Flag.withDescription("Start T3 Code when done"),
+  Flag.withDefault(false),
+);
+
+const describeApply: Record<Install.ApplyResult, string> = {
+  installed: "Shim installed.",
+  "reapplied-after-update": "Shim re-applied after a T3 Code update.",
+  refreshed: "Shim refreshed.",
+};
+
+const installOrRepair = (withDeploy: boolean) =>
+  Effect.fn(function* (options: { readonly wait: boolean; readonly launch: boolean }) {
+    const t = yield* target;
+    yield* Processes.ensureClosed(t.installDir, options.wait);
+    if (withDeploy) {
+      yield* Artifacts.deploy(t.home);
+      yield* Console.log(`Bundles copied to ${t.home.dist}.`);
+    }
+    const result = yield* Install.applyShim(t, yield* Artifacts.shimEntry);
+    yield* Console.log(describeApply[result]);
+    if (options.launch) yield* Processes.launch(t.exe, []);
+  });
+
+const install = Command.make("install", { wait, launch: launchAfter }, installOrRepair(true)).pipe(
+  Command.withDescription("Copy the bundles and install the shim"),
+);
+
+const repair = Command.make("repair", { wait, launch: launchAfter }, installOrRepair(false)).pipe(
+  Command.withDescription("Re-apply the shim after a T3 Code update replaced it"),
+);
+
+const uninstall = Command.make(
+  "uninstall",
+  {
+    wait,
+    purge: Flag.Boolean("purge").pipe(
+      Flag.withDescription("Also delete the t3mode data folder"),
+      Flag.withDefault(false),
+    ),
+  },
+  Effect.fn(function* (options) {
+    const t = yield* target;
+    const fs = yield* FileSystem.FileSystem;
+    yield* Processes.ensureClosed(t.installDir, options.wait);
+    const result = yield* Install.removeShim(t);
+    yield* Console.log(
+      result === "removed" ? "Original T3 Code restored." : "t3mode was not installed.",
+    );
+    if (options.purge) {
+      yield* fs.remove(t.home.root, { recursive: true, force: true });
+      yield* Console.log(`Deleted ${t.home.root}.`);
+    }
+  }),
+).pipe(Command.withDescription("Restore the original T3 Code"));
+
+const deploy = Command.make(
+  "deploy",
+  {},
+  Effect.fn(function* () {
+    const t = yield* target;
+    yield* Artifacts.deploy(t.home);
+    yield* Console.log(
+      `Bundles copied to ${t.home.dist}. Reload the window (Ctrl+R) to pick up renderer changes.`,
+    );
+  }),
+).pipe(Command.withDescription("Copy freshly built bundles into the t3mode home"));
+
+const status = Command.make(
+  "status",
+  {},
+  Effect.fn(function* () {
+    const t = yield* target;
+    const fs = yield* FileSystem.FileSystem;
+    const s = yield* Install.readStatus(t);
+    const running = yield* Processes.countRunningIn(t.installDir);
+    const deployed = yield* fs.exists(t.home.mainJs);
+    const safeMode = yield* fs.exists(t.home.safeMode);
+    const state = yield* fs.readFileString(t.home.state).pipe(Effect.option);
+    const log = yield* fs.readFileString(t.home.mainLog).pipe(Effect.option);
+    const archive =
+      s.archive === "t3mode"
+        ? `t3mode shim v${s.shimVersion}`
+        : s.archive === "original"
+          ? "original (t3mode not installed, or removed by an update)"
+          : `another mod (${s.foreignName})`;
+    yield* Console.log(
+      [
+        `t3mode          ${T3MODE_VERSION}`,
+        `T3 Code         ${s.t3codeVersion ?? "unknown"} at ${t.installDir}`,
+        `app.asar        ${archive}`,
+        `running         ${running > 0 ? `yes (${running} processes)` : "no"}`,
+        `home            ${t.home.root}`,
+        `bundles         ${deployed ? "deployed" : "missing (run install or deploy)"}`,
+        `safe mode       ${safeMode ? "requested for next launch" : "off"}`,
+        `boot state      ${Option.getOrElse(state, () => "none").trim()}`,
+      ].join("\n"),
+    );
+    if (Option.isSome(log)) {
+      const lines = log.value.trimEnd().split("\n").slice(-8);
+      yield* Console.log(`\nLast log lines (${t.home.mainLog}):\n${lines.join("\n")}`);
+    }
+  }),
+).pipe(Command.withDescription("Show what is installed and the last log lines"));
+
+const safe = Command.make(
+  "safe",
+  {},
+  Effect.fn(function* () {
+    const t = yield* target;
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.makeDirectory(t.home.root, { recursive: true });
+    yield* fs.writeFileString(t.home.safeMode, "requested from the CLI\n");
+    yield* Console.log("The next T3 Code launch runs without t3mode, once.");
+  }),
+).pipe(Command.withDescription("Run the next launch without t3mode"));
+
+const sandbox = Command.make(
+  "sandbox",
+  {
+    refresh: Flag.Boolean("refresh").pipe(
+      Flag.withDescription("Copy T3 Code again before installing"),
+      Flag.withDefault(false),
+    ),
+    port: Flag.Int("port").pipe(
+      Flag.withDescription("Chrome DevTools port of the sandbox window"),
+      Flag.withDefault(9333),
+    ),
+    launch: Flag.Boolean("no-launch").pipe(
+      Flag.withDescription("Prepare the sandbox without starting it"),
+      Flag.withDefault(false),
+      Flag.map((noLaunch) => !noLaunch),
+    ),
+  },
+  Effect.fn(function* (options) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const flags = yield* root;
+    const source = yield* Target.resolve({ installDir: flags.installDir, home: Option.none() });
+    const dir = path.join(yield* Artifacts.repoRoot, ".sandbox");
+    const appDir = path.join(dir, "app");
+
+    yield* Processes.ensureClosed(appDir, false);
+    if (options.refresh || !(yield* fs.exists(appDir))) {
+      yield* Console.log(`Copying ${source.installDir} to ${appDir}…`);
+      yield* Processes.mirror(source.installDir, appDir);
+    }
+    const t = yield* Target.resolve({
+      installDir: Option.some(appDir),
+      home: Option.some(path.join(dir, "home")),
+    });
+    yield* Artifacts.deploy(t.home);
+    yield* Console.log(describeApply[yield* Install.applyShim(t, yield* Artifacts.shimEntry)]);
+
+    if (!options.launch) return;
+    // T3 Code's own data goes to the sandbox too, so the copy never touches the real profile or ~/.t3.
+    yield* Processes.launch(t.exe, [`--remote-debugging-port=${options.port}`], {
+      [HOME_ENV]: t.home.root,
+      [SANDBOX_APPDATA_ENV]: path.join(dir, "appdata"),
+      // Also set here, so the sandbox stays isolated even when the loader fails to start.
+      APPDATA: path.join(dir, "appdata"),
+      T3CODE_HOME: path.join(dir, "t3home"),
+    });
+    yield* Console.log(`Sandbox started. DevTools: http://127.0.0.1:${options.port}/json`);
+  }),
+).pipe(Command.withDescription("Run t3mode on a private copy of T3 Code, for development"));
+
+const MainLayer = AsarArchive.layer.pipe(Layer.provideMerge(NodeServices.layer));
+
+root.pipe(
+  Command.withSubcommands([install, repair, uninstall, deploy, status, safe, sandbox]),
+  Command.run({ version: T3MODE_VERSION }),
+  Effect.provide(MainLayer),
+  NodeRuntime.runMain,
+);

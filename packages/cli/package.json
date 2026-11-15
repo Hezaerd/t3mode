@@ -1,0 +1,19 @@
+{
+  "name": "@t3mode/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "effect-tsgo tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@effect/platform-node": "catalog:",
+    "@electron/asar": "4.3.2",
+    "@t3mode/shared": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}
