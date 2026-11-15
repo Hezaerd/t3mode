@@ -319,8 +319,7 @@ This would be Vencord-style find-and-replace on T3 Code's own code, for changes 
 
 ## Open questions
 
-Settled: written from scratch (t3mod only informs the design). t3mode itself is installed from the repo. Plugins are shared as standalone GitHub releases. The first one is `Hezaerd/t3mode-thread-details-collapsed`.
+Settled: written from scratch (t3mod only informs the design). t3mode itself is installed from the repo. t3mode and the SDK are MIT licensed, so plugin authors may use the SDK and license their own plugins as they like. Plugins are shared as standalone GitHub releases. The first one is `Hezaerd/t3mode-thread-details-collapsed`.
 
 - **Publishing the SDK.** `@t3mode/plugin-sdk` is on npm, published by the `t3mode` org. To publish, bump `version` in `packages/plugin-sdk/package.json` and merge to `main`. `.github/workflows/publish-sdk.yml` publishes any version npm doesn't have yet through npm trusted publishing, so no token is stored. Pull requests that touch the SDK run it as a dry run. Its `repository` field must stay `Hezaerd/t3mode`, because npm checks it against the workflow's repo. A change to `PluginApi` that breaks plugins needs a new major version and a new `api` number.
-- **License.** The SDK has no license yet, so plugin authors have no stated right to use it.
 - **Discovery.** Install-by-link needs no registry. If one is wanted later, a GitHub repo holding a JSON list that authors add to by pull request would do, the way Obsidian lists its plugins.

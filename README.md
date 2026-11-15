@@ -43,3 +43,7 @@ pnpm typecheck && pnpm lint && pnpm test
 ```
 
 The sandbox has its own profile and `T3CODE_HOME`, so it never touches the T3 Code you use.
+
+## License
+
+[MIT](LICENSE).
