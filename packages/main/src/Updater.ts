@@ -21,7 +21,7 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
-import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { ChildProcessSpawner } from "effect/process";
 
 import { app, net } from "electron";
 
@@ -33,6 +33,7 @@ import { helperArguments, launcherCommand } from "./HelperLaunch.ts";
 import { Home } from "./Home.ts";
 import { compareVersions } from "./Semver.ts";
 import { SettingsStore } from "./SettingsStore.ts";
+import { SignatureJson, signatureCommand } from "./Signature.ts";
 import {
   parseAppUpdateConfig,
   parseChannelInfo,
@@ -77,17 +78,11 @@ const DesktopSettingsJson = Schema.fromJsonString(
   Schema.Struct({ updateChannel: Schema.optionalKey(Schema.Unknown) }),
 );
 
-const SignatureJson = Schema.fromJsonString(
-  Schema.Struct({ Status: Schema.Number, Subject: Schema.NullOr(Schema.String) }),
-);
-
 /** Electron's own network stack, so system proxies apply as they do for T3 Code's updater. */
 const electronFetch = ((input: RequestInfo | URL, init?: RequestInit) =>
   net.fetch(input instanceof URL ? input.href : (input as string), init)) as typeof fetch;
 
 const fail = (message: string) => (cause: unknown) => new UpdateError({ message, cause });
-
-const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
 
 export interface UpdaterOptions {
   /** T3 Code's data folder, which holds its desktop settings (the update channel). */
@@ -186,14 +181,7 @@ export const make = Effect.fn("Updater.make")(function* (options: UpdaterOptions
     publishers: ReadonlyArray<string>,
   ) {
     const output = yield* spawner
-      .string(
-        ChildProcess.make("powershell.exe", [
-          "-NoProfile",
-          "-NonInteractive",
-          "-Command",
-          `Get-AuthenticodeSignature -LiteralPath ${quote(file)} | Select-Object @{n='Status';e={[int]$_.Status}}, @{n='Subject';e={$_.SignerCertificate.Subject}} | ConvertTo-Json -Compress`,
-        ]),
-      )
+      .string(signatureCommand(file))
       .pipe(Effect.mapError(fail("Could not check the installer's signature.")));
     const signature = yield* Schema.decodeEffect(SignatureJson)(output.trim()).pipe(
       Effect.mapError(fail("Could not read the installer's signature.")),
