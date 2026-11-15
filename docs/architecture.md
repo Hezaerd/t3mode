@@ -159,7 +159,7 @@ export default definePlugin({
 **The lockfile.** `<home>/plugins.json` lists what's installed, as `{ "version": 1, "plugins": { "<id>": { "source", "version", "sha256"? } } }`. A source is one of two kinds.
 
 - `{ "kind": "github", "owner", "repo", "tag"? }`. Its files come from the release. The URL is `https://github.com/<owner>/<repo>/releases/latest/download/<file>`, or `/releases/download/<tag>/<file>` when the install was pinned to a tag. They're copied to `<home>/plugins/<id>/`. These URLs aren't GitHub's REST API, so its limit of 60 requests an hour for unauthenticated clients doesn't apply. `sha256` is the hash of the installed `plugin.js`, and a copy that no longer matches it isn't loaded.
-- `{ "kind": "local", "path" }`, added by `pnpm t3mode plugin link <folder>`, for developing a plugin. The two files are read from that folder on every page load, so a rebuild and Ctrl+R pick up changes. Only the CLI adds local sources. Main never takes a file path from page code: its decode of the page's requests accepts GitHub sources only.
+- `{ "kind": "local", "path" }`, added by `pnpm t3mode plugin link <folder>`, for developing a plugin. The two files are read from that folder on every page load, so a rebuild and Ctrl+R pick up changes. Only the CLI adds local sources. Main never takes a file path from page code. Its decode of the page's requests accepts GitHub sources only.
 
 A `plugins.json` that doesn't decode, including one with a key that isn't a valid id, reads as empty and is logged. Every install, link and remove is refused until it is fixed or deleted, so a bad edit is never written over.
 
@@ -187,7 +187,7 @@ An id that's already installed from another source is refused. A repo is the sam
 });
 ```
 
-The runtime calls `load()` inside its fault isolation, so an error in a plugin's top-level code stops only that plugin. It loads every registered plugin when the page starts, including one that is turned off, and calls `start` only for those that are on. A plugin in `plugins.json` whose code didn't register shows as stopped after an error, with the reason. After an install or update from the page, the preload's `loadPlugin(id)` runs the new code, and the runtime swaps it in without a reload.
+The runtime calls `load()` inside its fault isolation, so an error in a plugin's top-level code stops only that plugin. It loads every registered plugin when the page starts, including one that is turned off, and calls `start` only for those that are on. A plugin in `plugins.json` whose code didn't register, or whose files fail their checks, shows "Can't load" with the reason, and its card keeps Remove. After an install or update from the page, the preload's `loadPlugin(id)` runs the new code, and the runtime swaps it in without a reload.
 
 **API.** `PluginApi` is a public contract, versioned by `api`. Besides the disposables above, it gives plugins the helpers that know T3 Code. These are `queryFirst`, `currentThreadKey`, `react.findPropsUp` and `react.findHookState`. They stay in t3mode, so when a nightly breaks one, a single t3mode fix repairs every plugin that uses it.
 
