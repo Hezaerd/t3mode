@@ -12,7 +12,7 @@ import {
   type PluginAction,
   isMainWindowUrl,
 } from "@t3mode/shared/Ipc";
-import type { GithubSource, PageScript } from "@t3mode/shared/Plugins";
+import type { GithubSource, PageScript, PluginDataSnapshot } from "@t3mode/shared/Plugins";
 import type { Settings } from "@t3mode/shared/Settings";
 import type { ShortcutAction, ShortcutStatus } from "@t3mode/shared/Shortcut";
 import type { UpdateAction, UpdateStatus } from "@t3mode/shared/Updates";
@@ -39,6 +39,8 @@ const start = (): void => {
     info: () => ipcRenderer.invoke(Channel.info) as Promise<Info>,
     readSettings: () => ipcRenderer.invoke(Channel.readSettings) as Promise<Settings>,
     writeSettings: (settings: Settings) => ipcRenderer.invoke(Channel.writeSettings, settings),
+    readPluginData: () => ipcRenderer.invoke(Channel.readPluginData) as Promise<PluginDataSnapshot>,
+    writePluginData: (id, data) => ipcRenderer.invoke(Channel.writePluginData, id, data),
     openLogs: () => ipcRenderer.invoke(Channel.openLogs),
     shortcut: (action: ShortcutAction) =>
       ipcRenderer.invoke(Channel.shortcut, action) as Promise<ShortcutStatus>,

@@ -61,6 +61,7 @@ export interface HomeLayout {
   readonly updateLog: string;
   readonly plugins: string;
   readonly pluginsLock: string;
+  readonly pluginData: string;
 }
 
 /** T3 Code's data folder: `T3CODE_HOME`, or `~/.t3`. */
@@ -104,5 +105,6 @@ export const homeLayout = (root: string): HomeLayout => {
     updateLog: NodePath.join(logs, "update.log"),
     plugins: NodePath.join(root, "plugins"),
     pluginsLock: NodePath.join(root, "plugins.json"),
+    pluginData: NodePath.join(root, "plugin-data"),
   };
 };

@@ -2,6 +2,8 @@
 import type {
   GithubSource,
   InstalledPlugin,
+  PluginData,
+  PluginDataSnapshot,
   PluginPreview,
   PluginResult,
   RemoveResult,
@@ -25,6 +27,8 @@ export const Channel = {
   info: "t3mode:info",
   /** Page → main: settings.json, or defaults when missing or invalid. */
   readSettings: "t3mode:read-settings",
+  readPluginData: "t3mode:read-plugin-data",
+  writePluginData: "t3mode:write-plugin-data",
   /** Page → main: replace settings.json. */
   writeSettings: "t3mode:write-settings",
   /** Page → main: show the logs folder in Explorer. */
@@ -68,6 +72,8 @@ export interface NativeBridge {
   readonly ready: () => Promise<void>;
   readonly info: () => Promise<Info>;
   readonly readSettings: () => Promise<Settings>;
+  readonly readPluginData: () => Promise<PluginDataSnapshot>;
+  readonly writePluginData: (id: string, data: PluginData) => Promise<void>;
   readonly writeSettings: (settings: Settings) => Promise<void>;
   readonly openLogs: () => Promise<void>;
   readonly shortcut: (action: ShortcutAction) => Promise<ShortcutStatus>;
