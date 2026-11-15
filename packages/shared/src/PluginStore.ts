@@ -331,7 +331,7 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
       .pipe(Effect.mapError(fail(`Could not reach GitHub for ${release}.`)));
     if (response.status === 404) {
       return yield* new PluginError({
-        message: `${release} has no ${file}. Check the link, and that the release has manifest.json and plugin.js.`,
+        message: `No ${file} in ${release}. Check the link, and that the release has manifest.json and plugin.js.`,
       });
     }
     if (response.status !== 200) {

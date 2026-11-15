@@ -109,7 +109,9 @@ describe("PluginStore", () => {
         expect(preview.manifest).toMatchObject({ id: "my-plugin", version: "1.0.0", api: 1 });
         expect(yield* fs.exists(home.pluginsLock)).toBe(false);
         expect(yield* failure(store.preview("not a link"))).toContain("not a GitHub repository");
-        expect(yield* failure(store.preview("someone/missing"))).toContain("has no manifest.json");
+        expect(yield* failure(store.preview("someone/missing"))).toContain(
+          "No manifest.json in the latest release of someone/missing.",
+        );
       }),
     ));
 
