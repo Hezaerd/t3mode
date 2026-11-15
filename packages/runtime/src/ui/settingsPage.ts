@@ -938,6 +938,12 @@ export class SettingsPage {
             }),
           ),
     );
+    const panel = runtime.panel(plugin.id);
+    if (panel) {
+      const host = h("div");
+      body.append(section(panel.title, null, host));
+      panel.render(host);
+    }
   }
 
   #sourceText(plugin: InstalledPlugin): string {

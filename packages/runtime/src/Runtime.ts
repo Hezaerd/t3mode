@@ -18,6 +18,7 @@ import { pluginStorage } from "./PluginStorage.ts";
 import { queryFirst } from "./dom.ts";
 import { findHookState, findPropsUp } from "./lib/react.ts";
 import { currentThreadKey } from "./lib/thread.ts";
+import { button, group, row } from "./ui/native.ts";
 import { toast } from "./ui/toast.ts";
 
 export type PluginState =
@@ -25,6 +26,11 @@ export type PluginState =
   | { readonly kind: "running"; readonly report: PluginReport | null }
   | { readonly kind: "failed"; readonly error: string }
   | { readonly kind: "unavailable"; readonly reason: string };
+
+export interface SettingsPanel {
+  readonly title: string;
+  readonly render: (host: HTMLElement) => void;
+}
 
 type Entry =
   | {
@@ -88,6 +94,7 @@ export class Runtime {
   readonly #states = new Map<string, PluginState>();
   readonly #listeners = new Set<() => void>();
   readonly #updateListeners = new Set<(status: UpdateStatus) => void>();
+  readonly #panels = new Map<string, SettingsPanel>();
   #settings: Settings;
   #update: UpdateStatus | undefined;
   readonly info: Info;
@@ -146,6 +153,11 @@ export class Runtime {
     const entry = this.#entries.get(id);
     if (entry?.kind === "broken") return { kind: "unavailable", reason: entry.reason };
     return this.#states.get(id) ?? { kind: "off" };
+  }
+
+  /** The section a running plugin added to its settings page. */
+  panel(id: string): SettingsPanel | undefined {
+    return this.#panels.get(id);
   }
 
   isEnabled(id: string): boolean {
@@ -533,6 +545,19 @@ export class Runtime {
       },
       onCleanup: add,
       storage: this.#storage.storage(id),
+      settingsPanel: (title, render) => {
+        this.#panels.set(id, { title, render: guard(render) });
+        add(() => this.#panels.delete(id));
+        this.#emit();
+      },
+      toast: (message, kind) => {
+        if (alive()) toast(message, kind);
+      },
+      ui: {
+        group,
+        row,
+        button: (options) => button({ ...options, onClick: guard(options.onClick) }),
+      },
       log: (level, message) => this.log(level, `[${id}] ${message}`),
       report: (report) => {
         const state = this.state(id);

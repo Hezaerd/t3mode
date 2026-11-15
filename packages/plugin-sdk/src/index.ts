@@ -32,6 +32,28 @@ export interface PluginReport {
   readonly detail: string;
 }
 
+export interface RowOptions {
+  readonly title?: string;
+  /** Text, or nodes such as a textarea, under the title. */
+  readonly description?: string | Node;
+  /** Shown on the right, or under the text in a narrow pane. */
+  readonly control?: Node | null;
+}
+
+export interface ButtonOptions {
+  readonly text: string;
+  readonly variant?: "ghost" | "outline";
+  readonly onClick: () => void;
+}
+
+/** T3 Code's own settings components, so a settings panel looks native. */
+export interface PluginUi {
+  /** A bordered group of rows, with a line between rows. */
+  readonly group: (...rows: ReadonlyArray<Node>) => HTMLElement;
+  readonly row: (options: RowOptions) => HTMLElement;
+  readonly button: (options: ButtonOptions) => HTMLButtonElement;
+}
+
 export interface PluginApi<O extends OptionsSpec = OptionsSpec> {
   /** The id from the plugin's manifest.json. */
   readonly id: string;
@@ -62,6 +84,11 @@ export interface PluginApi<O extends OptionsSpec = OptionsSpec> {
     readonly get: <T>(key: string, fallback: T) => T;
     readonly set: (key: string, value: unknown) => void;
   };
+  /** A section on the plugin's settings page, below Options, filled by `render` on each draw. */
+  readonly settingsPanel: (title: string, render: (host: HTMLElement) => void) => void;
+  /** A short message in the window's corner. Dropped once the plugin has stopped. */
+  readonly toast: (message: string, kind?: "info" | "error") => void;
+  readonly ui: PluginUi;
   readonly log: (level: LogLevel, message: string) => void;
   readonly report: (report: PluginReport) => void;
   /** The first element matching any of the selectors, tried in order: newest markup first. */
