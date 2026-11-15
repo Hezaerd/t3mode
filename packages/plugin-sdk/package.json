@@ -1,7 +1,12 @@
 {
   "name": "@t3mode/plugin-sdk",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "definePlugin and the plugin API types for t3mode, the plugin loader for T3 Code",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hezaerd/t3mode.git",
+    "directory": "packages/plugin-sdk"
+  },
   "files": [
     "dist"
   ],
