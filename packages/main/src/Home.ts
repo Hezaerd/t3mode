@@ -13,6 +13,6 @@ export class Home extends Context.Service<Home, { readonly layout: HomeLayout }>
 export const layer = Layer.effect(
   Home,
   Effect.sync(() =>
-    Home.of({ layout: homeLayout(resolveHomeRoot(process.env, app.getPath("appData"))) }),
+    Home.of({ layout: homeLayout(resolveHomeRoot(process.env, app.getPath("home"))) }),
   ),
 );

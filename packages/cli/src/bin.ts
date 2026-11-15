@@ -1,6 +1,7 @@
 // `pnpm t3mode <command>`: install, repair, uninstall, deploy, status, safe, sandbox, plugin.
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Config from "effect/Config";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -24,6 +25,7 @@ import { T3MODE_VERSION } from "@t3mode/shared/Version";
 import * as Artifacts from "./Artifacts.ts";
 import * as AsarArchive from "./Asar.ts";
 import * as Install from "./Install.ts";
+import * as LegacyHome from "./LegacyHome.ts";
 import * as Processes from "./Processes.ts";
 import * as Target from "./Target.ts";
 
@@ -34,7 +36,9 @@ const root = Command.make("t3mode").pipe(
       Flag.optional,
     ),
     home: Flag.Directory("home").pipe(
-      Flag.withDescription(`t3mode data folder (default: $${HOME_ENV} or %APPDATA%\\t3mode)`),
+      Flag.withDescription(
+        `t3mode data folder (default: $${HOME_ENV} or <T3CODE_HOME or ~/.t3>/t3mode)`,
+      ),
       Flag.optional,
     ),
   }),
@@ -64,6 +68,17 @@ const installOrRepair = (withDeploy: boolean) =>
   Effect.fn(function* (options: { readonly wait: boolean; readonly launch: boolean }) {
     const t = yield* target;
     yield* Processes.ensureClosed(t.installDir, options.wait);
+    const flags = yield* root;
+    if (
+      Option.isNone(flags.home) &&
+      !(yield* Config.String(HOME_ENV).pipe(Config.withDefault(""))).trim()
+    ) {
+      const appData = (yield* Config.String("APPDATA").pipe(Config.withDefault(""))).trim();
+      if (appData) {
+        const path = yield* Path.Path;
+        yield* LegacyHome.move(path.join(appData, "t3mode"), t.home.root);
+      }
+    }
     if (withDeploy) {
       yield* Artifacts.deploy(t.home);
       yield* Console.log(`Bundles copied to ${t.home.dist}.`);

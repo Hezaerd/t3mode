@@ -1,8 +1,8 @@
 {
   "name": "t3mode-plugin-example",
   "private": true,
-  "type": "module",
   "license": "MIT",
+  "type": "module",
   "scripts": {
     "build": "vp pack"
   },

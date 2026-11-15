@@ -5,7 +5,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-import { HOME_ENV, type HomeLayout, homeLayout } from "@t3mode/shared/Layout";
+import { type HomeLayout, homeLayout, resolveHomeRoot } from "@t3mode/shared/Layout";
 
 import { CliFailure } from "./Errors.ts";
 
@@ -28,10 +28,7 @@ const defaultInstallDir = Effect.gen(function* () {
 });
 
 const defaultHome = Effect.gen(function* () {
-  const path = yield* Path.Path;
-  const fromEnv = yield* Config.String(HOME_ENV).pipe(Config.option);
-  if (Option.isSome(fromEnv) && fromEnv.value.trim()) return fromEnv.value.trim();
-  return path.join(yield* Config.String("APPDATA"), "t3mode");
+  return resolveHomeRoot(process.env, yield* Config.String("USERPROFILE"));
 });
 
 export const resolveHome = Effect.fn("Target.resolveHome")(
