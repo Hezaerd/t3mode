@@ -183,13 +183,14 @@ export class Runtime {
     await this.#save(id, { options });
   }
 
-  /** Restarts a failed plugin, loading its code again first if that is what failed. */
+  /** Loads a plugin's code again if that is what failed, and restarts it if it's on. */
   retry(id: string): void {
     const entry = this.#entries.get(id);
     if (!entry) return;
     this.#stop(id);
+    this.#states.delete(id);
     if (entry.kind === "broken") this.#entries.set(id, this.#load(entry.info));
-    this.#start(id);
+    if (this.isEnabled(id)) this.#start(id);
     this.#emit();
   }
 

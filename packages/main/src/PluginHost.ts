@@ -58,7 +58,7 @@ export const make = Effect.gen(function* () {
   let updates: Readonly<Record<string, string>> = {};
 
   const withUpdate = (plugin: InstalledPlugin): InstalledPlugin => {
-    const newer = updates[plugin.id];
+    const newer = Object.hasOwn(updates, plugin.id) ? updates[plugin.id] : undefined;
     return newer !== undefined && compareVersions(newer, plugin.version) > 0
       ? { ...plugin, update: newer }
       : plugin;

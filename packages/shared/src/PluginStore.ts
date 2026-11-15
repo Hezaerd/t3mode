@@ -22,6 +22,7 @@ import {
   isGithubRepo,
   isGithubTag,
   isPluginId,
+  lockEntry,
   type LockEntry,
   type Lockfile,
   type Manifest,
@@ -187,7 +188,7 @@ const failed = (plugin: InstalledPlugin, error: string) => ({
 
 /** Refuses an id that is already installed from another repo or folder. */
 const checkConflict = (current: Lockfile, id: string, source: LockEntry["source"]) => {
-  const existing = current.plugins[id];
+  const existing = lockEntry(current, id);
   return existing && !sameSource(existing.source, source)
     ? Effect.fail(
         new PluginError({
@@ -398,7 +399,7 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
   });
 
   const entryOf = Effect.fn("PluginStore.entryOf")(function* (id: string) {
-    const entry = (yield* readLock).plugins[id];
+    const entry = lockEntry(yield* readLock, id);
     if (!entry) return yield* new PluginError({ message: `"${id}" is not installed.` });
     return entry;
   });
@@ -438,7 +439,7 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
 
   const remove = Effect.fn("PluginStore.remove")(function* (id: string) {
     const current = yield* readLock;
-    const entry = current.plugins[id];
+    const entry = lockEntry(current, id);
     if (!entry) return false;
     const plugins = Object.fromEntries(
       Object.entries(current.plugins).filter(([key]) => key !== id),
@@ -511,7 +512,7 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
   return PluginStore.of({
     list: inspectAll.pipe(Effect.map((items) => items.map((item) => item.plugin))),
     script: Effect.fn("PluginStore.script")(function* (id: string) {
-      const entry = (yield* readLock.pipe(Effect.orElseSucceed(() => EMPTY_LOCK))).plugins[id];
+      const entry = lockEntry(yield* readLock.pipe(Effect.orElseSucceed(() => EMPTY_LOCK)), id);
       if (!entry) return undefined;
       const { code } = yield* inspect(id, entry);
       return code ? toScript(id, code) : undefined;

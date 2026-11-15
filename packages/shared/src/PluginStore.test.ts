@@ -18,8 +18,8 @@ import { homeLayout } from "./Layout.ts";
 import * as PluginStore from "./PluginStore.ts";
 import { type GithubSource, MAX_PLUGIN_CODE_BYTES } from "./Plugins.ts";
 
-/** Release assets by URL path, as GitHub serves them. */
-const assets = new Map<string, string | Uint8Array>();
+/** Release assets by URL path, as GitHub serves them. Chunks are sent without a length. */
+const assets = new Map<string, string | Uint8Array | ReadonlyArray<Uint8Array>>();
 let server: NodeHttp.Server;
 let base = "";
 
@@ -30,7 +30,13 @@ beforeAll(async () => {
       response.writeHead(404).end("Not Found");
       return;
     }
-    response.writeHead(200, { "content-type": "application/octet-stream" }).end(body);
+    response.writeHead(200, { "content-type": "application/octet-stream" });
+    if (typeof body === "string" || body instanceof Uint8Array) {
+      response.end(body);
+      return;
+    }
+    for (const chunk of body) response.write(chunk);
+    response.end();
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address() as { port: number };
@@ -57,7 +63,10 @@ const CODE = "module.exports = { options: {}, start() {} };\n";
 /** Publishes a release: the latest one, or the one at `tag`. */
 const publish = (
   repo: string,
-  files: { readonly manifest: string; readonly code?: string | Uint8Array },
+  files: {
+    readonly manifest: string;
+    readonly code?: string | Uint8Array | ReadonlyArray<Uint8Array>;
+  },
   tag?: string,
 ) => {
   const release = tag === undefined ? "releases/latest/download" : `releases/download/${tag}`;
@@ -195,16 +204,37 @@ describe("PluginStore", () => {
       }),
     ));
 
-  it("refuses code over the size cap without writing anything", () =>
+  it("refuses code over the size cap, with or without a length, and writes nothing", () =>
     withStore(({ store, fs, home }) =>
       Effect.gen(function* () {
-        const code = new Uint8Array(MAX_PLUGIN_CODE_BYTES + 1).fill(0x20);
-        publish("someone/my-plugin", { manifest: manifest(), code });
-        expect(yield* failure(store.install(github("someone/my-plugin"), "my-plugin"))).toContain(
-          "plugin.js in the latest release of someone/my-plugin is larger than 5 MB",
-        );
+        const chunk = new Uint8Array(1024 * 1024).fill(0x20);
+        const chunked = [chunk, chunk, chunk, chunk, chunk, new Uint8Array([0x20])];
+        const whole = new Uint8Array(MAX_PLUGIN_CODE_BYTES + 1).fill(0x20);
+        for (const code of [whole, chunked]) {
+          publish("someone/my-plugin", { manifest: manifest(), code });
+          expect(yield* failure(store.install(github("someone/my-plugin"), "my-plugin"))).toContain(
+            "plugin.js in the latest release of someone/my-plugin is larger than 5 MB",
+          );
+        }
         expect(yield* fs.exists(home.plugins)).toBe(false);
         expect(yield* fs.exists(home.pluginsLock)).toBe(false);
+
+        publish("someone/my-plugin", { manifest: manifest(), code: chunked.slice(0, 5) });
+        const installed = yield* store.install(github("someone/my-plugin"), "my-plugin");
+        expect(installed.error).toBeUndefined();
+      }),
+    ));
+
+  it("treats an id named like an Object property as any other id", () =>
+    withStore(({ store }) =>
+      Effect.gen(function* () {
+        expect(yield* store.remove("constructor")).toBe(false);
+        publish("someone/odd", { manifest: manifest({ id: "constructor" }), code: CODE });
+        yield* store.preview("someone/odd");
+        const installed = yield* store.install(github("someone/odd"), "constructor");
+        expect(installed.error).toBeUndefined();
+        expect(yield* store.checkUpdates).toEqual({ updates: {}, failures: {} });
+        expect(yield* store.remove("constructor")).toBe(true);
       }),
     ));
 
@@ -252,7 +282,6 @@ describe("PluginStore", () => {
         yield* store.link(folder);
         expect(yield* fs.readFileString(home.pluginsLock)).toBe(lock);
 
-        // A rebuild is picked up without linking again, and isn't checked against a hash.
         yield* fs.writeFileString(path.join(folder, "plugin.js"), `${CODE}// rebuilt\n`);
         expect((yield* store.script("my-plugin"))?.code).toContain("// rebuilt");
       }),

@@ -52,6 +52,10 @@ export interface Lockfile {
   readonly plugins: Readonly<Record<string, LockEntry>>;
 }
 
+/** The entry for `id`. Own keys only, so an id like "constructor" never finds Object's. */
+export const lockEntry = (lock: Lockfile, id: string): LockEntry | undefined =>
+  Object.hasOwn(lock.plugins, id) ? lock.plugins[id] : undefined;
+
 export interface InstalledPlugin {
   readonly id: string;
   readonly name: string;
