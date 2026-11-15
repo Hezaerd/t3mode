@@ -14,8 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Pinned here rather than in packageManager: with packageManager, pnpm on Linux wants its own
-      # version in the lockfile, so --frozen-lockfile fails on a lockfile made on Windows.
+      # Pinned here, not in package.json: with a packageManager field, pnpm on the runner tries to
+      # record itself in the lockfile, and --frozen-lockfile refuses.
       - uses: pnpm/action-setup@v4
         with:
           version: 12.14.0
