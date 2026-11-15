@@ -1,0 +1,82 @@
+name: T3 Code nightly canary
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/canary.yml
+      - packages/cli/src/Doctor*.ts
+      - packages/shared/src/T3Hooks.ts
+
+permissions:
+  contents: read
+
+jobs:
+  doctor:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Find newest nightly
+        id: release
+        run: |
+          $releases = gh api 'repos/pingdotgg/t3code/releases?per_page=100' | ConvertFrom-Json
+          if ($LASTEXITCODE) { throw 'Could not list T3 Code releases' }
+          $release = $releases | Where-Object { !$_.draft -and $_.tag_name -match 'nightly' } | Sort-Object { [datetime]$_.published_at } -Descending | Select-Object -First 1
+          if (!$release) { throw 'No nightly release found' }
+          "tag=$($release.tag_name)" >> $env:GITHUB_OUTPUT
+      - uses: actions/cache/restore@v4
+        id: passed
+        with:
+          path: .canary-passed
+          key: canary-${{ runner.os }}-${{ steps.release.outputs.tag }}-${{ hashFiles('.github/workflows/canary.yml', 'packages/cli/src/Doctor*.ts', 'packages/shared/src/*.ts', 'pnpm-lock.yaml') }}
+      - if: steps.passed.outputs.cache-hit != 'true'
+        run: pnpm install --frozen-lockfile
+      - name: Extract installer without running it
+        if: steps.passed.outputs.cache-hit != 'true'
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          $download = Join-Path $env:RUNNER_TEMP 't3code-download'
+          gh release download $env:RELEASE_TAG --repo pingdotgg/t3code --pattern '*-x64.exe' --dir $download
+          if ($LASTEXITCODE) { throw 'Could not download nightly installer' }
+          $installer = Get-ChildItem $download -Filter '*-x64.exe' | Select-Object -First 1
+          $outer = Join-Path $env:RUNNER_TEMP 't3code-nsis'
+          $install = Join-Path $env:RUNNER_TEMP 't3code-install'
+          & 'C:\Program Files\7-Zip\7z.exe' x $installer.FullName "-o$outer" -y
+          if ($LASTEXITCODE) { throw 'Could not extract NSIS installer' }
+          $payload = Join-Path $outer '$PLUGINSDIR\app-64.7z'
+          if (!(Test-Path -LiteralPath $payload)) { throw "Missing NSIS payload at $payload" }
+          & 'C:\Program Files\7-Zip\7z.exe' x $payload "-o$install" -y
+          if ($LASTEXITCODE) { throw 'Could not extract app-64.7z' }
+          "T3_INSTALL=$install" >> $env:GITHUB_ENV
+      - name: Check compatibility
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        if: steps.passed.outputs.cache-hit != 'true'
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $PSNativeCommandUseErrorActionPreference = $false
+          pnpm t3mode doctor --install-dir $env:T3_INSTALL 2>&1 | Tee-Object -FilePath doctor-output.txt
+          $doctorExit = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
+          Get-Content doctor-output.txt >> $env:GITHUB_STEP_SUMMARY
+          if ($doctorExit) { exit $doctorExit }
+          New-Item .canary-passed -ItemType Directory -Force
+          Set-Content .canary-passed/tag $env:RELEASE_TAG
+      - uses: actions/cache/save@v4
+        if: success() && steps.passed.outputs.cache-hit != 'true'
+        with:
+          path: .canary-passed
+          key: canary-${{ runner.os }}-${{ steps.release.outputs.tag }}-${{ hashFiles('.github/workflows/canary.yml', 'packages/cli/src/Doctor*.ts', 'packages/shared/src/*.ts', 'pnpm-lock.yaml') }}

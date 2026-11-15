@@ -34,7 +34,7 @@ Checked on this machine against `0.1.10-nightly.20261114.4669`:
 | Detached console processes                   | Node's `detached: true` starts a process without a console, and `powershell.exe` exits at once without one             | The update helper is started through `Start-Process` (see Updates)                                 |
 | Stable DOM hooks                             | `data-*` attributes listed in T3 Code's theme guide (`[data-thread-details-card]`, `[data-chat-composer-form]`, …)     | Prefer these over class names, which change between releases                                       |
 
-Re-check all of this with `t3mode doctor` (see CLI) after big upstream releases.
+Run `pnpm t3mode doctor` (see CLI) to check the fuses, original entry, update feed, bundle tokens and runtime DOM hooks. The canary runs these checks on new nightlies.
 
 ## Overview
 
@@ -220,7 +220,7 @@ The runtime calls `load()` inside its fault isolation, so an error in a plugin's
 | `safe`      | Next launch without the mod                                                                                                   |
 | `plugin`    | `list`, `add <link>` (asks first, `--yes` skips), `update [id]`, `remove <id>`, `link <folder>` for a plugin in development   |
 | `status`    | Also shows a downloaded update waiting to install, and the update helper's last log lines                                     |
-| `doctor`    | (M4) Re-check every fact in _Facts about the target_ (fuses, entry path, updater config)                                      |
+| `doctor`    | Check the fuses, original entry, update feed, bundle tokens and runtime DOM hooks                                             |
 
 `install`, `repair` and `uninstall` refuse to run while T3 Code is open (`--wait` waits for it to close). The new shim is built before anything is moved, and a failed swap puts the original back.
 
@@ -306,7 +306,7 @@ t3mode/
   - Against the real `https://github.com`, a repo whose release has no `manifest.json` and a missing repo both got a message, and main refused a local source sent from page code.
 - **Real install.** On the real T3 Code install, the helper ran T3 Code's own installer and put the shim back, and T3 Code started with t3mode loaded. `pnpm t3mode status` shows the helper's log after each update.
 - **DOM (vitest + happy-dom).** Plugins against saved HTML snapshots of T3 Code screens.
-- **Compat canary (later).** A scheduled job pulls the latest nightly, extracts `app.asar`, runs `doctor` checks, and checks the selectors that plugins use against the real UI. Then breakage shows up in CI before it shows up on the desktop.
+- **Compat canary.** Every 6 hours, `.github/workflows/canary.yml` downloads the newest nightly installer and extracts it without running it. `pnpm t3mode doctor` checks the Electron fuses, original entry, desktop bridge and updater switch, update feed, script commands and runtime DOM hook tokens. A release is skipped only after it passes. Workflow and doctor changes also run on pull requests. DOM snapshot tests remain open.
 
 ## Milestones
 
@@ -315,7 +315,7 @@ t3mode/
 3. **M2.** Runtime, plugin API, settings pages, shortcut, user plugins. ✔ Proven on the sandbox.
 4. **M3.** Update handling (option A). ✔ Proven on the sandbox and on a real install.
 5. **Standalone plugins.** The plugin SDK, `plugins.json`, install from GitHub, `plugin link`, and the plugin template. ✔ Proven on the sandbox, with a stand-in for GitHub's release downloads.
-6. **M4.** Doctor, compat canary, DOM snapshot tests. ← next
+6. **M4.** Doctor and compat canary done. DOM snapshot tests remain open.
 7. **Later: patch engine** (see below).
 
 ## Later: patch engine
