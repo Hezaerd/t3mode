@@ -23,6 +23,10 @@ const locate = Effect.gen(function* () {
       { from: at("main", "dist", "main.cjs.map"), name: "main.cjs.map", optional: true },
       { from: at("preload", "dist", "preload.cjs"), name: "preload.cjs" },
       { from: at("runtime", "dist", "renderer.iife.js"), name: "renderer.js" },
+      // Used by the update helper to put the shim back after a T3 Code update.
+      { from: at("cli", "dist", "repair.cjs"), name: "repair.cjs" },
+      { from: at("shim", "dist", "index.cjs"), name: "shim.cjs" },
+      { from: at("main", "assets", "update-helper.ps1"), name: "update-helper.ps1" },
     ],
   };
 });
@@ -41,7 +45,7 @@ export const shimEntry = Effect.gen(function* () {
   return shim;
 });
 
-/** Copies main, preload and renderer bundles into `home.dist`. */
+/** Copies the loader, preload, renderer and update helper files into `home.dist`. */
 export const deploy = Effect.fn("Artifacts.deploy")(
   function* (home: HomeLayout) {
     const fs = yield* FileSystem.FileSystem;

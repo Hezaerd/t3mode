@@ -9,7 +9,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { Command, Flag } from "effect/cli";
 
-import { HOME_ENV, SANDBOX_APPDATA_ENV } from "@t3mode/shared/Layout";
+import { HOME_ENV, SANDBOX_APPDATA_ENV, SANDBOX_INSTALLER_ENV } from "@t3mode/shared/Layout";
 import { T3MODE_VERSION } from "@t3mode/shared/Version";
 
 import * as Artifacts from "./Artifacts.ts";
@@ -120,6 +120,11 @@ const status = Command.make(
     const safeMode = yield* fs.exists(t.home.safeMode);
     const state = yield* fs.readFileString(t.home.state).pipe(Effect.option);
     const log = yield* fs.readFileString(t.home.mainLog).pipe(Effect.option);
+    const ready = yield* fs.readFileString(t.home.updateReady).pipe(Effect.option);
+    const updateLog = yield* fs.readFileString(t.home.updateLog).pipe(Effect.option);
+    const pending = Option.flatMap(ready, (text) =>
+      Option.fromNullishOr(/"version":"([^"]+)"/.exec(text)?.[1]),
+    );
     const archive =
       s.archive === "t3mode"
         ? `t3mode shim v${s.shimVersion}`
@@ -136,8 +141,13 @@ const status = Command.make(
         `bundles         ${deployed ? "deployed" : "missing (run install or deploy)"}`,
         `safe mode       ${safeMode ? "requested for next launch" : "off"}`,
         `boot state      ${Option.getOrElse(state, () => "none").trim()}`,
+        `update          ${Option.match(pending, { onNone: () => "none downloaded", onSome: (version) => `${version}, installs when T3 Code quits` })}`,
       ].join("\n"),
     );
+    if (Option.isSome(updateLog)) {
+      const lines = updateLog.value.trimEnd().split("\n").slice(-5);
+      yield* Console.log(`\nLast update lines (${t.home.updateLog}):\n${lines.join("\n")}`);
+    }
     if (Option.isSome(log)) {
       const lines = log.value.trimEnd().split("\n").slice(-8);
       yield* Console.log(`\nLast log lines (${t.home.mainLog}):\n${lines.join("\n")}`);
@@ -194,6 +204,20 @@ const sandbox = Command.make(
     yield* Artifacts.deploy(t.home);
     yield* Console.log(describeApply[yield* Install.applyShim(t, yield* Artifacts.shimEntry)]);
 
+    // T3 Code's real installer always updates the real install, so the sandbox gets a stand-in
+    // that does to app.asar what an update does: it puts a vanilla archive over the shim.
+    const fakeInstaller = path.join(dir, "fake-installer.cmd");
+    yield* fs.writeFileString(
+      fakeInstaller,
+      [
+        "@echo off",
+        "rem Stand-in for T3 Code's installer in the t3mode sandbox (see pnpm t3mode sandbox).",
+        `echo %date% %time% fake installer %* >> "${path.join(dir, "fake-installer.log")}"`,
+        `copy /y "${path.join(t.resourcesDir, "_app.asar")}" "${path.join(t.resourcesDir, "app.asar")}" >nul`,
+        "",
+      ].join("\r\n"),
+    );
+
     if (!options.launch) return;
     // T3 Code's own data goes to the sandbox too, so the copy never touches the real profile or ~/.t3.
     // Keep rendering while another window covers the sandbox, so DevTools sees live updates.
@@ -206,6 +230,7 @@ const sandbox = Command.make(
     yield* Processes.launch(t.exe, args, {
       [HOME_ENV]: t.home.root,
       [SANDBOX_APPDATA_ENV]: path.join(dir, "appdata"),
+      [SANDBOX_INSTALLER_ENV]: fakeInstaller,
       // Also set here, so the sandbox stays isolated even when the loader fails to start.
       APPDATA: path.join(dir, "appdata"),
       T3CODE_HOME: path.join(dir, "t3home"),

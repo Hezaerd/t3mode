@@ -26,6 +26,7 @@ const main = async (): Promise<void> => {
     const runtime = new Runtime(native, plugins, settings, info);
     window.__t3modeRuntime = runtime;
     runtime.startAll();
+    runtime.watchUpdates();
     const page = new SettingsPage(runtime);
 
     installShortcut(runtime, page);

@@ -6,9 +6,17 @@ export interface PluginSettings {
   readonly options?: Readonly<Record<string, unknown>>;
 }
 
+export interface UpdateSettings {
+  /** t3mode installs T3 Code updates (default). Off: T3 Code's own updater runs, and each update removes t3mode. */
+  readonly manage?: boolean;
+}
+
 export interface Settings {
   readonly version: 1;
   readonly plugins: Readonly<Record<string, PluginSettings>>;
+  readonly updates?: UpdateSettings;
 }
+
+export const managesUpdates = (settings: Settings): boolean => settings.updates?.manage ?? true;
 
 export const defaultSettings: Settings = { version: 1, plugins: {} };

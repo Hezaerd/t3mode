@@ -19,6 +19,7 @@ const PluginSettingsSchema = Schema.Struct({
 export const SettingsSchema = Schema.Struct({
   version: Schema.Literal(1),
   plugins: Schema.Record(Schema.String, PluginSettingsSchema),
+  updates: Schema.optionalKey(Schema.Struct({ manage: Schema.optionalKey(Schema.Boolean) })),
 });
 
 const SettingsJson = Schema.fromJsonString(SettingsSchema);
@@ -61,3 +62,8 @@ export const layer = Layer.effect(
     return SettingsStore.of({ read, write });
   }),
 );
+
+// Compile-time guard: a field added to Settings must be added to the schema too, or main
+// would drop it on every write.
+type SchemaCoversSettings = keyof Settings extends keyof typeof SettingsSchema.Type ? true : never;
+export const schemaCoversSettings: SchemaCoversSettings = true;
