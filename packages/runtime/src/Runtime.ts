@@ -4,6 +4,7 @@ import type { OptionsSpec, PluginApi, PluginDefinition, PluginReport } from "@t3
 import type { Info, NativeBridge } from "@t3mode/shared/Ipc";
 import type {
   InstalledPlugin,
+  PluginDataSnapshot,
   PluginPreview,
   PluginRegistration,
   PluginResult,
@@ -13,6 +14,7 @@ import type { PluginSettings, Settings } from "@t3mode/shared/Settings";
 import type { ShortcutAction, ShortcutStatus } from "@t3mode/shared/Shortcut";
 import type { UpdateAction, UpdateStatus } from "@t3mode/shared/Updates";
 
+import { pluginStorage } from "./PluginStorage.ts";
 import { queryFirst } from "./dom.ts";
 import { findHookState, findPropsUp } from "./lib/react.ts";
 import { currentThreadKey } from "./lib/thread.ts";
@@ -43,8 +45,6 @@ declare global {
     __t3modePlugins?: PluginRegistry | Array<PluginRegistration>;
   }
 }
-
-const STORAGE_PREFIX = "t3mode:";
 
 const describe = (error: unknown) =>
   error instanceof Error ? (error.stack ?? error.message) : String(error);
@@ -80,6 +80,8 @@ export const optionValues = (
 
 export class Runtime {
   readonly #native: NativeBridge;
+  readonly #data = new Map<string, Record<string, unknown>>();
+  readonly #storage: ReturnType<typeof pluginStorage>;
   readonly #entries = new Map<string, Entry>();
   readonly #registrations = new Map<string, () => unknown>();
   readonly #cleanups = new Map<string, Array<() => void>>();
@@ -95,8 +97,13 @@ export class Runtime {
     installed: ReadonlyArray<InstalledPlugin>,
     settings: Settings,
     info: Info,
+    pluginData: PluginDataSnapshot,
   ) {
     this.#native = native;
+    for (const [id, data] of Object.entries(pluginData)) this.#data.set(id, { ...data });
+    this.#storage = pluginStorage(this.#data, native.writePluginData, (message) =>
+      this.log("warn", message),
+    );
     this.#settings = settings;
     this.info = info;
     const pending: unknown = window.__t3modePlugins;
@@ -219,13 +226,18 @@ export class Runtime {
   }
 
   async remove(id: string): Promise<PluginResult<RemoveResult>> {
+    const running = this.state(id).kind === "running";
+    this.#stop(id);
+    await this.#storage.flush(id);
     const result = await this.#ask("Remove", () => this.#native.plugins.remove(id));
     if (result.ok) {
-      this.#stop(id);
+      this.#data.delete(id);
       this.#entries.delete(id);
       this.#registrations.delete(id);
       this.#states.delete(id);
       this.#emit();
+    } else if (running) {
+      this.#start(id);
     }
     return result;
   }
@@ -514,23 +526,7 @@ export class Runtime {
         return element;
       },
       onCleanup: add,
-      storage: {
-        get: (key, fallback) => {
-          try {
-            const raw = localStorage.getItem(`${STORAGE_PREFIX}${id}:${key}`);
-            return raw === null ? fallback : (JSON.parse(raw) as typeof fallback);
-          } catch {
-            return fallback;
-          }
-        },
-        set: (key, value) => {
-          try {
-            localStorage.setItem(`${STORAGE_PREFIX}${id}:${key}`, JSON.stringify(value));
-          } catch (error) {
-            this.log("warn", `Plugin ${id} could not store ${key}: ${describe(error)}`);
-          }
-        },
-      },
+      storage: this.#storage.storage(id),
       log: (level, message) => this.log(level, `[${id}] ${message}`),
       report: (report) => {
         const state = this.state(id);

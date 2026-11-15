@@ -22,12 +22,13 @@ const main = async (): Promise<void> => {
   const native = window.t3modeNative;
   if (!native || window.__t3modeRuntime) return;
   try {
-    const [info, settings, installed] = await Promise.all([
+    const [info, settings, installed, pluginData] = await Promise.all([
       native.info(),
       native.readSettings(),
       native.plugins.list(),
+      native.readPluginData(),
     ]);
-    const runtime = new Runtime(native, installed, settings, info);
+    const runtime = new Runtime(native, installed, settings, info, pluginData);
     window.__t3modeRuntime = runtime;
     runtime.startAll();
     runtime.watchUpdates();
