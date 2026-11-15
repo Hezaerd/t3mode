@@ -17,7 +17,7 @@ pnpm t3mode status
 
 t3mode installs T3 Code's updates itself, because T3 Code's own updater would remove it. It checks the same feed, verifies each installer's SHA-512 and signature, and installs it when you quit T3 Code, then puts itself back. Settings → T3 Mode shows the status and has "Restart now". To hand updates back to T3 Code, turn off "Install updates through T3 Mode"; then run `pnpm t3mode repair` after each update.
 
-If something breaks, `pnpm t3mode safe` skips t3mode for the next launch, and `pnpm t3mode uninstall` restores the original. Logs are in `%APPDATA%\t3mode\logs`.
+If something breaks, `pnpm t3mode safe` skips t3mode for the next launch, and `pnpm t3mode uninstall` restores the original. Logs are in `~/.t3/t3mode/logs`, or `<T3CODE_HOME>/t3mode/logs` when `T3CODE_HOME` is set. `T3MODE_HOME` overrides the t3mode data folder.
 
 ## Plugins
 

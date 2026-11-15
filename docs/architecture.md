@@ -44,7 +44,7 @@ flowchart LR
     SHIM["app.asar (t3mode shim)"]
     ORIG["_app.asar (original T3 Code)"]
   end
-  subgraph Data["%APPDATA%\\t3mode"]
+  subgraph Data["~/.t3/t3mode"]
     DIST["dist/ main.js, preload.js, renderer.js"]
     CFG["settings.json, state.json, logs/"]
     PLG["plugins.json, plugins/"]
@@ -73,12 +73,14 @@ flowchart LR
 The new `app.asar`. Kept tiny and rarely changed, because every change means reinstalling it.
 
 - Contains `index.js`, a `t3mode.json` marker holding the shim version, and a `package.json` copied from the original with only `main` changed. Electron reads the app's name and version from the entry archive, so they stay T3 Code's.
-- `index.js` loads `%APPDATA%\t3mode\dist\main.cjs` **inside try/catch**. If loading fails, it writes `logs\shim.log` and continues.
+- `index.js` loads `~/.t3/t3mode/dist/main.cjs` **inside try/catch**. If loading fails, it writes `logs\shim.log` and continues.
 - Then it always boots the original: `app.setAppPath(_app.asar)`, then `require` the original `main`.
 - `T3MODE_DISABLE=1` skips the loader. `SAFE_MODE` is handled by the loader (below).
 - Bundled from `packages/shim` with no runtime dependencies and no Effect.
 
 Fixes a t3mod weakness: in t3mod, a broken loader keeps T3 Code from starting.
+
+The shim, loader, and CLI share `resolveHomeRoot`. `T3MODE_HOME` overrides the data folder. Otherwise it is `<T3CODE_HOME>/t3mode`, or `~/.t3/t3mode` when `T3CODE_HOME` is unset. `install` and `repair` move the legacy `%APPDATA%\t3mode` folder when using the default home and the new root does not exist. If both folders exist, they leave both untouched and report that the old folder is unused.
 
 ### 2. Loader (`packages/main`)
 
@@ -203,7 +205,7 @@ The runtime calls `load()` inside its fault isolation, so an error in a plugin's
 | Command     | Does                                                                                                                          |
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `install`   | Wait for T3 Code to close, rename `app.asar` to `_app.asar`, copy `app.asar.unpacked`, write the shim, copy `dist/`, relaunch |
-| `uninstall` | Restore the original, keep `%APPDATA%\t3mode` unless `--purge`                                                                |
+| `uninstall` | Restore the original, keep `~/.t3/t3mode` unless `--purge`                                                                    |
 | `repair`    | Re-apply the shim after an update overwrote it                                                                                |
 | `status`    | Installed? Shim version, T3 Code version, mod enabled, last errors                                                            |
 | `deploy`    | Copy freshly built bundles into the home (renderer changes then need only Ctrl+R)                                             |

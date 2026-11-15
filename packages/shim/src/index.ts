@@ -32,7 +32,7 @@ const logShimError = (layout: HomeLayout, error: unknown): void => {
 
 const loadMod = (): void => {
   if (process.env[DISABLE_ENV] === "1") return;
-  const layout = homeLayout(resolveHomeRoot(process.env, app.getPath("appData")));
+  const layout = homeLayout(resolveHomeRoot(process.env, app.getPath("home")));
   if (!NodeFs.existsSync(layout.mainJs)) return;
   try {
     NodeModule.createRequire(layout.mainJs)(layout.mainJs);

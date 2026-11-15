@@ -25,7 +25,7 @@ export const Resources = {
 export const MARKER_FILE = "t3mode.json";
 
 /** Bump when the shim's behavior changes, so `status` can tell an old shim apart. */
-export const SHIM_VERSION = 1;
+export const SHIM_VERSION = 2;
 
 export interface Marker {
   readonly name: "t3mode";
@@ -63,16 +63,16 @@ export interface HomeLayout {
   readonly pluginsLock: string;
 }
 
-export const resolveHomeRoot = (
-  env: Readonly<Record<string, string | undefined>>,
-  appData: string,
-): string => env[HOME_ENV]?.trim() || NodePath.join(appData, "t3mode");
-
 /** T3 Code's data folder: `T3CODE_HOME`, or `~/.t3`. */
 export const t3HomePath = (
   env: Readonly<Record<string, string | undefined>>,
   homeDirectory: string,
 ): string => env["T3CODE_HOME"]?.trim() || NodePath.join(homeDirectory, ".t3");
+
+export const resolveHomeRoot = (
+  env: Readonly<Record<string, string | undefined>>,
+  homeDirectory: string,
+): string => env[HOME_ENV]?.trim() || NodePath.join(t3HomePath(env, homeDirectory), "t3mode");
 
 /** T3 Code's keybindings file: `<T3CODE_HOME or ~/.t3>/userdata/keybindings.json`. */
 export const t3KeybindingsPath = (
