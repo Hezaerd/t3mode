@@ -2,7 +2,11 @@
 // its files come from, and how its code is wrapped for the page.
 
 export type PluginData = Readonly<Record<string, unknown>>;
-export type PluginDataSnapshot = Readonly<Record<string, PluginData>>;
+export interface PluginDataSnapshot {
+  readonly data: Readonly<Record<string, PluginData>>;
+  /** Plugins whose data file exists but isn't a JSON object. Nothing writes over these files. */
+  readonly unreadable: ReadonlyArray<string>;
+}
 
 export const PLUGIN_API_VERSION = 1;
 

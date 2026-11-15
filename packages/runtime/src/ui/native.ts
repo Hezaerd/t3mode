@@ -88,7 +88,7 @@ export const group = (...rows: ReadonlyArray<Node>): HTMLElement =>
   h("div", { className: native.group, attrs: { "data-slot": "settings-group" } }, ...rows);
 
 export const row = (options: {
-  readonly title: string;
+  readonly title?: string;
   readonly description?: string | Node;
   readonly control?: Node | null;
   readonly disabled?: boolean;
@@ -108,11 +108,13 @@ export const row = (options: {
       h(
         "div",
         { className: native.rowText },
-        h(
-          "div",
-          { className: native.rowTitleLine },
-          h("h3", { className: native.rowTitle, text: options.title }),
-        ),
+        options.title === undefined
+          ? null
+          : h(
+              "div",
+              { className: native.rowTitleLine },
+              h("h3", { className: native.rowTitle, text: options.title }),
+            ),
         options.description === undefined
           ? null
           : typeof options.description === "string"

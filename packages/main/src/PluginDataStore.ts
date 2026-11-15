@@ -40,12 +40,13 @@ export const layer = Layer.effect(
     const { layout } = yield* Home;
     const read = Effect.gen(function* () {
       const names = yield* files.list(layout.pluginData);
-      const entries: Array<readonly [string, typeof DataSchema.Type]> = [];
+      const data: Record<string, typeof DataSchema.Type> = {};
+      const unreadable: Array<string> = [];
       for (const name of names) {
         if (!name.endsWith(".json")) continue;
         const id = name.slice(0, -5);
         if (!isPluginId(id)) continue;
-        const data = yield* files.readText(NodePath.join(layout.pluginData, name)).pipe(
+        const record = yield* files.readText(NodePath.join(layout.pluginData, name)).pipe(
           Effect.flatMap(
             Option.match({
               onNone: () => Effect.succeed(Option.none<typeof DataSchema.Type>()),
@@ -53,18 +54,19 @@ export const layer = Layer.effect(
             }),
           ),
           Effect.catch((error) =>
-            Effect.logWarning(`Plugin data ${name} unreadable, skipping`, error).pipe(
+            Effect.logWarning(`Plugin data ${name} unreadable, leaving it untouched`, error).pipe(
+              Effect.andThen(Effect.sync(() => unreadable.push(id))),
               Effect.as(Option.none<typeof DataSchema.Type>()),
             ),
           ),
         );
-        if (Option.isSome(data)) entries.push([id, data.value]);
+        if (Option.isSome(record)) data[id] = record.value;
       }
-      return Object.fromEntries(entries);
+      return { data, unreadable };
     }).pipe(
       Effect.catch((error) =>
         Effect.logWarning("Plugin data folder unreadable, using empty data", error).pipe(
-          Effect.as<PluginDataSnapshot>({}),
+          Effect.as<PluginDataSnapshot>({ data: {}, unreadable: [] }),
         ),
       ),
     );
