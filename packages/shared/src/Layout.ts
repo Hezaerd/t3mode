@@ -3,6 +3,8 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodePath from "node:path";
 
+export const T3_UPDATER_OFF_ENV = "T3CODE_DISABLE_AUTO_UPDATE";
+
 export const HOME_ENV = "T3MODE_HOME";
 export const DISABLE_ENV = "T3MODE_DISABLE";
 export const SANDBOX_APPDATA_ENV = "T3MODE_SANDBOX_APPDATA";

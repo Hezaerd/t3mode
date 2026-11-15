@@ -42,7 +42,7 @@ import {
   pickRelease,
   resolveChannel,
   signatureRejection,
-} from "./UpdateFeed.ts";
+} from "@t3mode/shared/UpdateFeed";
 
 /** First check after T3 Code starts, then one an hour. */
 const FIRST_CHECK = Duration.seconds(20);

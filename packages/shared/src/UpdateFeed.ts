@@ -1,7 +1,7 @@
 // Reading T3 Code's update feed, the way electron-updater does: `app-update.yml` in T3 Code's
 // resources names the GitHub repo and the publisher, each release carries `<channel>.yml`, and
 // that file lists the installers with their SHA-512. Pure functions, so they are unit tested.
-import { compareVersions, parseVersion } from "@t3mode/shared/Semver";
+import { compareVersions, parseVersion } from "./Semver.ts";
 
 export type YamlValue =
   | string

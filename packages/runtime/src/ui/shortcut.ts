@@ -2,6 +2,7 @@
 // listed and rebindable in Settings → Keybindings. T3 Code ignores the command; this listener
 // resolves each key press against T3 Code's live bindings and opens the Plugins page on a match.
 import { SHORTCUT_COMMAND } from "@t3mode/shared/Shortcut";
+import { T3_HOOKS, hookSelector } from "@t3mode/shared/T3Hooks";
 
 import {
   focusContext,
@@ -39,7 +40,7 @@ export const installShortcut = (runtime: Runtime, page: SettingsPage): void => {
       // Bindings without Ctrl, Cmd or Alt are rare; skip the lookup for plain typing.
       if (!(event.ctrlKey || event.metaKey || event.altKey || /^F\d+$/.test(event.key))) return;
       // T3 Code's key recorder in Settings → Keybindings.
-      if (event.target instanceof Element && event.target.closest("[data-keybinding-capture]")) {
+      if (event.target instanceof Element && event.target.closest(hookSelector(T3_HOOKS.capture))) {
         return;
       }
       const rules = readKeybindings();

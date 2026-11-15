@@ -2,7 +2,11 @@
 // (native.ts). Colors come from T3 Code's theme variables, so the page follows the active
 // theme, light or dark, with fallbacks if a variable disappears.
 
+import { SHORTCUT_COMMAND } from "@t3mode/shared/Shortcut";
+import { T3_HOOKS, hookSelector } from "@t3mode/shared/T3Hooks";
+
 const STYLE_ATTRIBUTE = "data-t3mode-ui";
+const SHORTCUT_BADGE = `${hookSelector({ ...T3_HOOKS.keybinding, value: `${T3_HOOKS.keybinding.value}${SHORTCUT_COMMAND}` })} ${hookSelector(T3_HOOKS.badge)}`;
 
 const CSS = `
 [data-t3mode-toasts] {
@@ -81,12 +85,12 @@ const CSS = `
 [data-t3mode-page] [data-slot="select-list"]:focus { outline: none; }
 
 /* Settings → Keybindings lists T3 Mode's shortcut as a project script; badge it "T3 Mode" instead. */
-[id="keybinding-script.t3-mode-plugins.run"] [data-slot="badge"] { font-size: 0; }
-[id="keybinding-script.t3-mode-plugins.run"] [data-slot="badge"]::after {
+${SHORTCUT_BADGE} { font-size: 0; }
+${SHORTCUT_BADGE}::after {
   content: "T3 Mode"; font-size: .75rem;
 }
 @media (min-width: 640px) {
-  [id="keybinding-script.t3-mode-plugins.run"] [data-slot="badge"]::after { font-size: .625rem; }
+  ${SHORTCUT_BADGE}::after { font-size: .625rem; }
 }
 `;
 

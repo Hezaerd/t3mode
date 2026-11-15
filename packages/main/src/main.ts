@@ -9,7 +9,12 @@ import * as NodeChildProcessSpawner from "@effect/platform-node/NodeChildProcess
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 
-import { SANDBOX_APPDATA_ENV, SANDBOX_INSTALLER_ENV, t3HomePath } from "@t3mode/shared/Layout";
+import {
+  SANDBOX_APPDATA_ENV,
+  SANDBOX_INSTALLER_ENV,
+  T3_UPDATER_OFF_ENV,
+  t3HomePath,
+} from "@t3mode/shared/Layout";
 import { T3MODE_VERSION } from "@t3mode/shared/Version";
 
 import * as BootGuard from "./BootGuard.ts";
@@ -24,9 +29,6 @@ import * as Preload from "./Preload.ts";
 import * as SettingsStore from "./SettingsStore.ts";
 import * as T3Keybindings from "./T3Keybindings.ts";
 import * as Updater from "./Updater.ts";
-
-/** T3 Code's own switch for its updater (apps/desktop DesktopConfig). */
-const T3_UPDATER_OFF_ENV = "T3CODE_DISABLE_AUTO_UPDATE";
 
 /**
  * Dev sandbox (`pnpm t3mode sandbox`): send T3 Code's own data to a throwaway folder, so the
