@@ -316,7 +316,14 @@ describe("PluginStore", () => {
       Effect.gen(function* () {
         publish("someone/my-plugin", { manifest: manifest(), code: CODE });
         yield* store.install(github("someone/my-plugin"), "my-plugin");
+        yield* fs.makeDirectory(home.pluginData, { recursive: true });
+        const dataFile = path.join(home.pluginData, "my-plugin.json");
+        const otherFile = path.join(home.pluginData, "other.json");
+        yield* fs.writeFileString(dataFile, '{"count":1}');
+        yield* fs.writeFileString(otherFile, '{"count":2}');
         expect(yield* store.remove("my-plugin")).toBe("removed");
+        expect(yield* fs.exists(dataFile)).toBe(false);
+        expect(yield* fs.readFileString(otherFile)).toBe('{"count":2}');
         expect(yield* store.list).toEqual([]);
         expect(yield* fs.exists(path.join(home.plugins, "my-plugin"))).toBe(false);
         expect(yield* store.remove("my-plugin")).toBe("not-installed");
@@ -326,14 +333,21 @@ describe("PluginStore", () => {
         yield* fs.writeFileString(path.join(folder, "manifest.json"), manifest());
         yield* fs.writeFileString(path.join(folder, "plugin.js"), CODE);
         yield* store.link(folder);
+        yield* fs.writeFileString(dataFile, '{"count":3}');
         expect(yield* store.remove("my-plugin")).toBe("removed");
+        expect(yield* fs.exists(dataFile)).toBe(false);
         expect(yield* fs.exists(path.join(folder, "plugin.js"))).toBe(true);
+        yield* store.link(folder);
+        expect(yield* store.remove("my-plugin")).toBe("removed");
       }),
     ));
 
   it("finds newer releases of unpinned plugins, and updates them", () =>
-    withStore(({ store }) =>
+    withStore(({ store, fs, path, home }) =>
       Effect.gen(function* () {
+        yield* fs.makeDirectory(home.pluginData, { recursive: true });
+        const dataFile = path.join(home.pluginData, "my-plugin.json");
+        yield* fs.writeFileString(dataFile, '{"count":1}');
         publish("someone/my-plugin", { manifest: manifest(), code: CODE });
         publish(
           "someone/pinned",
@@ -352,7 +366,9 @@ describe("PluginStore", () => {
           failures: {},
         });
 
+        expect(yield* fs.readFileString(dataFile)).toBe('{"count":1}');
         const updated = yield* store.update("my-plugin");
+        expect(yield* fs.readFileString(dataFile)).toBe('{"count":1}');
         expect(updated).toMatchObject({ version: "1.1.0", sha256: sha256(newer) });
         expect(yield* store.checkUpdates).toEqual({ updates: {}, failures: {} });
         expect(yield* failure(store.update("pinned"))).toContain("pinned to v1.0.0");

@@ -23,6 +23,7 @@ export class FilesError extends Schema.TaggedError<FilesError>()("FilesError", {
 export class Files extends Context.Service<
   Files,
   {
+    readonly list: (path: string) => Effect.Effect<ReadonlyArray<string>, FilesError>;
     readonly readText: (path: string) => Effect.Effect<Option.Option<string>, FilesError>;
     /** Writes a temp file next to `path`, then renames it over `path`. */
     readonly writeTextAtomic: (path: string, text: string) => Effect.Effect<void, FilesError>;
@@ -36,6 +37,9 @@ const attempt = <A>(operation: string, path: string, run: () => A) =>
   Effect.try({ try: run, catch: (cause) => new FilesError({ operation, path, cause }) });
 
 export const make = Files.of({
+  list: Effect.fn("Files.list")((path: string) =>
+    attempt("list", path, () => (NodeFs.existsSync(path) ? NodeFs.readdirSync(path) : [])),
+  ),
   readText: Effect.fn("Files.readText")((path: string) =>
     attempt("read", path, () =>
       NodeFs.existsSync(path) ? Option.some(NodeFs.readFileSync(path, "utf8")) : Option.none(),

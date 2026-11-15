@@ -17,6 +17,7 @@ import * as FileLogger from "./FileLogger.ts";
 import * as Files from "./Files.ts";
 import * as Home from "./Home.ts";
 import * as Ipc from "./Ipc.ts";
+import * as PluginDataStore from "./PluginDataStore.ts";
 import * as PluginHost from "./PluginHost.ts";
 import * as Preload from "./Preload.ts";
 import * as SettingsStore from "./SettingsStore.ts";
@@ -85,7 +86,7 @@ const MainLayer = Layer.mergeAll(
   Updater.layer(updaterOptions),
   PluginHost.layer,
 ).pipe(
-  Layer.provideMerge(SettingsStore.layer),
+  Layer.provideMerge(Layer.mergeAll(SettingsStore.layer, PluginDataStore.layer)),
   Layer.provideMerge(FileLogger.layer),
   Layer.provideMerge(Layer.mergeAll(Files.layer, Home.layer, PlatformLayer)),
 );

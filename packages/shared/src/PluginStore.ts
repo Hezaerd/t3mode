@@ -440,6 +440,9 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
         .remove(path.join(layout.plugins, id), { recursive: true, force: true })
         .pipe(Effect.mapError(fail(`Could not delete ${path.join(layout.plugins, id)}.`)));
     }
+    yield* fs
+      .remove(path.join(layout.pluginData, `${id}.json`), { force: true })
+      .pipe(Effect.mapError(fail(`Could not delete data for ${id}.`)));
     yield* Effect.logInfo(`Removed ${id}`);
     return "removed" as const;
   }, withLock);

@@ -10,6 +10,7 @@ import { T3MODE_VERSION } from "@t3mode/shared/Version";
 import { BootGuard } from "./BootGuard.ts";
 import { withElectronFetch } from "./ElectronFetch.ts";
 import { Home } from "./Home.ts";
+import { PluginDataStore } from "./PluginDataStore.ts";
 import { PluginHost } from "./PluginHost.ts";
 import { SettingsStore } from "./SettingsStore.ts";
 import { ShortcutActionSchema, T3Keybindings } from "./T3Keybindings.ts";
@@ -73,6 +74,7 @@ export const register = Effect.fn("Ipc.register")(function* (options: {
   const plugins = yield* PluginHost;
   const guard = yield* BootGuard;
   const settings = yield* SettingsStore;
+  const pluginData = yield* PluginDataStore;
   const keybindings = yield* T3Keybindings;
   const updater = yield* Updater;
   // Pages that asked for the update status get every change pushed to them.
@@ -117,6 +119,8 @@ export const register = Effect.fn("Ipc.register")(function* (options: {
     handle(Channel.ready, () =>
       guard.markHealthy.pipe(Effect.andThen(Effect.logInfo("Renderer ready"))),
     );
+    handle(Channel.readPluginData, () => pluginData.read);
+    handle(Channel.writePluginData, (args) => pluginData.write(args[0], args[1]));
     handle(Channel.readSettings, () => settings.read);
     handle(Channel.writeSettings, (args) => settings.write(args[0]));
     handle(Channel.openLogs, () => openPath(layout.logs));

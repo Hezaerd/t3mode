@@ -1,6 +1,9 @@
 // Standalone plugins (see "Plugins" in docs/architecture.md): what an installed plugin is, where
 // its files come from, and how its code is wrapped for the page.
 
+export type PluginData = Readonly<Record<string, unknown>>;
+export type PluginDataSnapshot = Readonly<Record<string, PluginData>>;
+
 export const PLUGIN_API_VERSION = 1;
 
 export const PLUGIN_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
