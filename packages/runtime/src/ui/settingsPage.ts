@@ -64,10 +64,16 @@ type InstallStep =
   | { readonly kind: "confirm"; readonly preview: PluginPreview }
   | { readonly kind: "installing"; readonly preview: PluginPreview };
 
-/** Retry helps when the plugin's own code failed, not when its files are wrong. */
+/**
+ * Retry reads a plugin that couldn't load from disk again, which helps after its code is fixed or
+ * a linked plugin is rebuilt. An installed copy with wrong files needs installing again instead.
+ */
 const canRetry = (runtime: Runtime, plugin: InstalledPlugin): boolean => {
   const kind = runtime.state(plugin.id).kind;
-  return kind === "failed" || (kind === "unavailable" && plugin.error === undefined);
+  return (
+    kind === "failed" ||
+    (kind === "unavailable" && (plugin.error === undefined || plugin.source.kind === "local"))
+  );
 };
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
@@ -771,7 +777,7 @@ export class SettingsPage {
       text: "Retry",
       icon: "retry",
       variant,
-      onClick: () => this.#runtime.retry(plugin.id),
+      onClick: () => void this.#runtime.retry(plugin.id),
     });
   }
 

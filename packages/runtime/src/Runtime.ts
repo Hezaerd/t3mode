@@ -183,13 +183,26 @@ export class Runtime {
     await this.#save(id, { options });
   }
 
-  /** Loads a plugin's code again if that is what failed, and restarts it if it's on. */
-  retry(id: string): void {
+  /**
+   * Restarts a plugin. One that couldn't load is read from disk again first, so a linked plugin
+   * picks up a rebuild that fixed it.
+   */
+  async retry(id: string): Promise<void> {
     const entry = this.#entries.get(id);
     if (!entry) return;
     this.#stop(id);
     this.#states.delete(id);
-    if (entry.kind === "broken") this.#entries.set(id, this.#load(entry.info));
+    if (entry.kind === "broken") {
+      const listed = await this.#native.plugins.list().catch(() => undefined);
+      const info = listed?.find((plugin) => plugin.id === id) ?? entry.info;
+      if (info.error === undefined) {
+        this.#registrations.delete(id);
+        await this.#native.loadPlugin(id).catch((error: unknown) => {
+          this.log("error", `Plugin ${id} could not be loaded: ${describe(error)}`);
+        });
+      }
+      this.#entries.set(id, this.#load(info));
+    }
     if (this.isEnabled(id)) this.#start(id);
     this.#emit();
   }
