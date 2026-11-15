@@ -17,6 +17,7 @@ import * as FileLogger from "./FileLogger.ts";
 import * as Files from "./Files.ts";
 import * as Home from "./Home.ts";
 import * as Ipc from "./Ipc.ts";
+import * as PluginHost from "./PluginHost.ts";
 import * as Preload from "./Preload.ts";
 import * as SettingsStore from "./SettingsStore.ts";
 import * as T3Keybindings from "./T3Keybindings.ts";
@@ -82,6 +83,7 @@ const MainLayer = Layer.mergeAll(
   BootGuard.layer,
   T3Keybindings.layer,
   Updater.layer(updaterOptions),
+  PluginHost.layer,
 ).pipe(
   Layer.provideMerge(SettingsStore.layer),
   Layer.provideMerge(FileLogger.layer),

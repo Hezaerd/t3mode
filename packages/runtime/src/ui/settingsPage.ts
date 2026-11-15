@@ -5,9 +5,10 @@
 //
 // The pane is React's. t3mode adds its page as the pane's last child and hides React's
 // children with CSS while it is open, so React's nodes are never moved or removed.
+import type { InstalledPlugin } from "@t3mode/shared/Plugins";
+
 import { h } from "../dom.ts";
 import type { PluginState, Runtime } from "../Runtime.ts";
-import type { Plugin } from "../types.ts";
 import { icon, type IconName } from "./icons.ts";
 import {
   button,
@@ -54,13 +55,15 @@ const FILTERS = [
 
 type Tone = "active" | "waiting" | "failed" | "off";
 
-const status = (runtime: Runtime, plugin: Plugin): { tone: Tone; text: string } => {
+const status = (runtime: Runtime, plugin: InstalledPlugin): { tone: Tone; text: string } => {
   const state: PluginState = runtime.state(plugin.id);
   switch (state.kind) {
     case "off":
-      return { tone: "off", text: runtime.isEnabled(plugin) ? "Starting" : "Off" };
+      return { tone: "off", text: runtime.isEnabled(plugin.id) ? "Starting" : "Off" };
     case "failed":
       return { tone: "failed", text: `Stopped after an error: ${state.error.split("\n")[0]}` };
+    case "unavailable":
+      return { tone: "failed", text: `Can't load: ${state.reason}` };
     case "running":
       if (!state.report) return { tone: "active", text: "Running" };
       return {
@@ -70,7 +73,7 @@ const status = (runtime: Runtime, plugin: Plugin): { tone: Tone; text: string } 
   }
 };
 
-const statusLine = (runtime: Runtime, plugin: Plugin) => {
+const statusLine = (runtime: Runtime, plugin: InstalledPlugin) => {
   const { tone, text } = status(runtime, plugin);
   return h(
     "div",
@@ -313,10 +316,7 @@ export class SettingsPage {
     const root = this.#root;
     if (!root) return;
     const focusedId = document.activeElement?.id;
-    const plugin =
-      this.#view.kind === "plugin"
-        ? this.#runtime.plugins.find((item) => item.id === (this.#view as { id: string }).id)
-        : undefined;
+    const plugin = this.#view.kind === "plugin" ? this.#runtime.plugin(this.#view.id) : undefined;
     if (this.#view.kind === "plugin" && !plugin) this.#view = { kind: "plugins" };
 
     const body = h("div", { className: native.pageBody });
@@ -335,7 +335,7 @@ export class SettingsPage {
     if (focusedId) document.getElementById(focusedId)?.focus();
   }
 
-  #header(plugin: Plugin | undefined): HTMLElement {
+  #header(plugin: InstalledPlugin | undefined): HTMLElement {
     const crumbs: Array<Node> = [
       h("li", { className: native.crumb, text: "Settings" }),
       crumbSeparator(),
@@ -449,7 +449,7 @@ export class SettingsPage {
 
   #renderPlugins(body: HTMLElement): void {
     const runtime = this.#runtime;
-    const enabled = runtime.plugins.filter((plugin) => runtime.isEnabled(plugin)).length;
+    const enabled = runtime.plugins.filter((plugin) => runtime.isEnabled(plugin.id)).length;
 
     const search = h("input", {
       className: "t3mode-search-input",
@@ -522,7 +522,7 @@ export class SettingsPage {
     const runtime = this.#runtime;
     const query = this.#query.trim().toLowerCase();
     const shown = runtime.plugins.filter((plugin) => {
-      const on = runtime.isEnabled(plugin);
+      const on = runtime.isEnabled(plugin.id);
       if (this.#filter === "enabled" && !on) return false;
       if (this.#filter === "disabled" && on) return false;
       return (
@@ -534,7 +534,7 @@ export class SettingsPage {
     });
     const count = this.#body?.querySelector(".t3mode-count");
     if (count) {
-      const enabled = runtime.plugins.filter((plugin) => runtime.isEnabled(plugin)).length;
+      const enabled = runtime.plugins.filter((plugin) => runtime.isEnabled(plugin.id)).length;
       count.textContent = `${enabled} of ${runtime.plugins.length} enabled`;
     }
     const focusedId = document.activeElement?.id;
@@ -547,7 +547,7 @@ export class SettingsPage {
               text: query
                 ? `No plugin matches "${this.#query.trim()}".`
                 : runtime.plugins.length === 0
-                  ? "No plugins in this build. Add yours to packages/runtime/src/userplugins, then build and deploy."
+                  ? "No plugins installed yet. Paste a plugin's GitHub link above to install it."
                   : "No plugins here.",
             }),
           ]),
@@ -555,14 +555,14 @@ export class SettingsPage {
     if (focusedId) document.getElementById(focusedId)?.focus();
   }
 
-  #card(plugin: Plugin): HTMLElement {
+  #card(plugin: InstalledPlugin): HTMLElement {
     const runtime = this.#runtime;
-    const hasOptions = Object.keys(plugin.options).length > 0;
+    const hasOptions = Object.keys(runtime.optionSpec(plugin.id)).length > 0;
     const details = () => this.#go({ kind: "plugin", id: plugin.id });
     const toggle = switchControl({
       label: `Enable ${plugin.name}`,
-      checked: runtime.isEnabled(plugin),
-      onChange: (checked) => void runtime.setEnabled(plugin, checked),
+      checked: runtime.isEnabled(plugin.id),
+      onChange: (checked) => void runtime.setEnabled(plugin.id, checked),
     });
     toggle.id = `t3mode-${plugin.id}-switch`;
     const settings = iconButton({
@@ -599,40 +599,40 @@ export class SettingsPage {
         { className: "t3mode-card-foot" },
         statusLine(runtime, plugin),
         failed
-          ? button({ text: "Retry", icon: "retry", onClick: () => runtime.retry(plugin) })
+          ? button({ text: "Retry", icon: "retry", onClick: () => runtime.retry(plugin.id) })
           : null,
       ),
     );
   }
 
-  #renderPlugin(body: HTMLElement, plugin: Plugin): void {
+  #renderPlugin(body: HTMLElement, plugin: InstalledPlugin): void {
     const runtime = this.#runtime;
-    const enabled = runtime.isEnabled(plugin);
-    const values = runtime.options(plugin);
+    const enabled = runtime.isEnabled(plugin.id);
+    const values = runtime.options(plugin.id);
     const failed = runtime.state(plugin.id).kind === "failed";
     const toggle = switchControl({
       label: `Enable ${plugin.name}`,
       checked: enabled,
-      onChange: (checked) => void runtime.setEnabled(plugin, checked),
+      onChange: (checked) => void runtime.setEnabled(plugin.id, checked),
     });
     toggle.id = `t3mode-${plugin.id}-enabled`;
     toggle.setAttribute("data-t3mode-focus", "");
 
-    const optionRows = Object.entries(plugin.options).map(([key, option]) => {
+    const optionRows = Object.entries(runtime.optionSpec(plugin.id)).map(([key, option]) => {
       const label = option.label;
       const control =
         option.type === "boolean"
           ? switchControl({
               label,
               checked: values[key] === true,
-              onChange: (checked) => void runtime.setOption(plugin, key, checked),
+              onChange: (checked) => void runtime.setOption(plugin.id, key, checked),
             })
           : selectControl({
               host: this.#root ?? body,
               label,
               value: String(values[key]),
               choices: option.choices,
-              onChange: (value) => void runtime.setOption(plugin, key, value),
+              onChange: (value) => void runtime.setOption(plugin.id, key, value),
             });
       control.id = `t3mode-${plugin.id}-option-${key}`;
       return row({
@@ -656,7 +656,7 @@ export class SettingsPage {
                   text: "Retry",
                   icon: "retry",
                   variant: "outline",
-                  onClick: () => runtime.retry(plugin),
+                  onClick: () => runtime.retry(plugin.id),
                 })
               : null,
           }),

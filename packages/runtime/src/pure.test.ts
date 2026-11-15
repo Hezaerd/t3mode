@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import type { OptionsSpec } from "@t3mode/plugin-sdk";
+
 import { currentThreadKey } from "./lib/thread.ts";
-import { optionValues } from "./Runtime.ts";
-import type { OptionsSpec } from "./types.ts";
+import { optionValues, pluginDefinition } from "./Runtime.ts";
 
 describe("optionValues", () => {
   const spec: OptionsSpec = {
@@ -31,6 +32,22 @@ describe("optionValues", () => {
       compact: false,
       when: "a",
     });
+  });
+});
+
+describe("pluginDefinition", () => {
+  const definition = { options: {}, start: () => undefined };
+
+  it("takes module.exports or its default export", () => {
+    expect(pluginDefinition(definition)).toBe(definition);
+    expect(pluginDefinition({ __esModule: true, default: definition })).toBe(definition);
+  });
+
+  it("finds nothing in exports that aren't a plugin", () => {
+    for (const exported of [undefined, null, {}, { start: 1, options: {} }, { start() {} }, 42]) {
+      expect(pluginDefinition(exported)).toBeUndefined();
+    }
+    expect(pluginDefinition({ default: { start() {} } })).toBeUndefined();
   });
 });
 

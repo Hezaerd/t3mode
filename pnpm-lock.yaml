@@ -102,6 +102,9 @@ importers:
 
   packages/runtime:
     devDependencies:
+      '@t3mode/plugin-sdk':
+        specifier: workspace:*
+        version: link:../plugin-sdk
       '@t3mode/shared':
         specifier: workspace:*
         version: link:../shared

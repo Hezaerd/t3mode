@@ -1,11 +1,19 @@
 // The contract between the preload and the main process.
+import type { GithubSource, InstalledPlugin, PluginPreview, PluginResult } from "./Plugins.ts";
 import type { Settings } from "./Settings.ts";
 import type { ShortcutAction, ShortcutStatus } from "./Shortcut.ts";
 import type { UpdateAction, UpdateStatus } from "./Updates.ts";
 
 export const Channel = {
-  /** Preload → main: the source of renderer.js, re-read from disk on every call. */
-  rendererSource: "t3mode:renderer-source",
+  /**
+   * Preload → main: the scripts to run in the page, in order. Each loadable plugin, wrapped so
+   * it only registers itself, then renderer.js. Re-read from disk on every call.
+   */
+  pageScripts: "t3mode:page-scripts",
+  /** Preload → main: one plugin's wrapped script, or null, after an install or update. */
+  pluginScript: "t3mode:plugin-script",
+  /** Page → main: a PluginAction. */
+  plugins: "t3mode:plugins",
   /** Page → main: one log line for the t3mode log file. */
   log: "t3mode:log",
   /** Page → main: the runtime started, so this boot counts as healthy. */
@@ -25,6 +33,17 @@ export const Channel = {
   /** Main → page: the update status changed. Sent to pages that asked for the status. */
   updateChanged: "t3mode:update-changed",
 } as const;
+
+export const RENDERER_SCRIPT_NAME = "t3mode-renderer.js";
+
+/** The Plugins page's requests. Main decodes each one, and accepts only GitHub sources. */
+export type PluginAction =
+  | { readonly _tag: "list" }
+  | { readonly _tag: "preview"; readonly input: string }
+  | { readonly _tag: "install"; readonly source: GithubSource; readonly id: string }
+  | { readonly _tag: "update"; readonly id: string }
+  | { readonly _tag: "remove"; readonly id: string }
+  | { readonly _tag: "check" };
 
 /** T3 Code's main window. Dev builds use schemes like `t3code-dev`. */
 export const MAIN_WINDOW_URL = /^t3code(?:-[a-z]+)?:\/\/app\//;
@@ -53,4 +72,17 @@ export interface NativeBridge {
   readonly update: (action: UpdateAction) => Promise<UpdateStatus>;
   /** Calls `listener` with each new update status. */
   readonly onUpdate: (listener: (status: UpdateStatus) => void) => void;
+  readonly plugins: {
+    /** Every installed plugin, with `update` filled in after a check. */
+    readonly list: () => Promise<ReadonlyArray<InstalledPlugin>>;
+    readonly preview: (input: string) => Promise<PluginResult<PluginPreview>>;
+    readonly install: (source: GithubSource, id: string) => Promise<PluginResult<InstalledPlugin>>;
+    readonly update: (id: string) => Promise<PluginResult<InstalledPlugin>>;
+    /** False when it wasn't installed. */
+    readonly remove: (id: string) => Promise<PluginResult<boolean>>;
+    /** The list after the check. An error names the plugins whose check failed. */
+    readonly checkUpdates: () => Promise<PluginResult<ReadonlyArray<InstalledPlugin>>>;
+  };
+  /** Runs a plugin's current code in the page, so it registers again. Rejects when it can't. */
+  readonly loadPlugin: (id: string) => Promise<void>;
 }

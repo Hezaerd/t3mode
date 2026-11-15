@@ -9,7 +9,3 @@ coverage/
 Thumbs.db
 .sandbox/
 *.tsbuildinfo
-
-# Personal plugins (see packages/runtime/src/userplugins/README.md)
-packages/runtime/src/userplugins/*
-!packages/runtime/src/userplugins/README.md
