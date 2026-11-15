@@ -1,0 +1,37 @@
+[
+  {
+    "name": "no-rollback",
+    "mirrors": "Install.ts applyShim: drop the catch on fs.rename(nextShim, paths.shimAsar), so a failed rename no longer puts _app.asar back",
+    "breaks": "OnlyKnownBreaks",
+    "edits": [["IF pc = \"a_renameShim\" /\\ current = \"original\"", "IF FALSE"]]
+  },
+  {
+    "name": "remove-after-rename",
+    "mirrors": "Install.ts applyShim: move fs.remove(paths.originalAsar) after fs.rename(paths.shimAsar, paths.originalAsar), so it deletes the fresh original",
+    "breaks": "KeepsOriginal",
+    "edits": [
+      [
+        "THEN IF hadOrig THEN \"a_removeOrig\" ELSE \"a_removeOrigUnp\"",
+        "THEN \"a_removeOrigUnp\""
+      ],
+      ["/\\ pc' = \"a_copy\"", "/\\ pc' = IF hadOrig THEN \"a_removeOrig\" ELSE \"a_copy\""],
+      ["/\\ pc' = \"a_removeOrigUnp\"", "/\\ pc' = \"a_copy\""]
+    ]
+  },
+  {
+    "name": "shim-before-unpacked",
+    "mirrors": "Install.ts applyShim: rename the shim into app.asar before copying app.asar.unpacked to _app.asar.unpacked",
+    "breaks": "OnlyKnownBreaks",
+    "edits": [
+      ["/\\ pc' = \"a_copy\"", "/\\ pc' = \"a_renameShim\""],
+      [
+        "    /\\ app' = Shim\n    /\\ Finish\n",
+        "    /\\ app' = Shim\n    /\\ IF current = \"original\"\n       THEN pc' = \"a_copy\" /\\ UNCHANGED <<current, hadOrig, lastStop>>\n       ELSE Finish\n"
+      ],
+      [
+        "    /\\ origUnp' = unp\n    /\\ pc' = \"a_renameShim\"\n    /\\ UNCHANGED <<app, unp, orig, installed, current, hadOrig, faults, lastStop>>",
+        "    /\\ origUnp' = unp\n    /\\ Finish\n    /\\ UNCHANGED <<app, unp, orig, installed, faults>>"
+      ]
+    ]
+  }
+]

@@ -1,0 +1,119 @@
+{
+  "fingerprint": "200df6ef57a8af57",
+  "fingerprinted": [
+    {
+      "file": "packages/cli/src/Install.ts",
+      "name": "applyShim"
+    },
+    {
+      "file": "packages/cli/src/Install.ts",
+      "name": "removeShim"
+    },
+    {
+      "file": "packages/cli/src/Asar.ts",
+      "name": "readRootFile"
+    },
+    {
+      "file": "packages/cli/src/Asar.ts",
+      "name": "inspect"
+    },
+    {
+      "file": "packages/shim/src/index.ts",
+      "name": "bootOriginal"
+    },
+    {
+      "file": "packages/shared/src/Layout.ts",
+      "name": "Resources"
+    }
+  ],
+  "calls": [
+    {
+      "file": "packages/cli/src/Install.ts",
+      "name": "applyShim",
+      "steps": [
+        ["asar.inspect(paths.shimAsar)", "RepairStarts"],
+        ["fs.exists(paths.originalAsar)", "RepairStarts"],
+        ["asar.readRootFile(originalPackageSource, \"package.json\")", "RepairStarts"],
+        ["fs.makeTempDirectoryScoped({ prefix: \"t3mode-shim-\" })", "ApplyPacksShim"],
+        ["fs.copyFile(shimEntry, path.join(dir, \"index.js\"))", "ApplyPacksShim"],
+        [
+          "fs.writeFileString( path.join(dir, \"package.json\"), yield* encodeJson({ ...pkg, main: \"index.js\" }), )",
+          "ApplyPacksShim"
+        ],
+        [
+          "fs.writeFileString(path.join(dir, MARKER_FILE), yield* encodeJson(makeMarker()))",
+          "ApplyPacksShim"
+        ],
+        ["asar.pack(dir, nextShim)", "ApplyPacksShim"],
+        ["fs.remove(paths.originalAsar, { force: true })", "ApplyRemovesStaleOriginal"],
+        [
+          "fs.remove(paths.originalUnpacked, { recursive: true, force: true })",
+          "ApplyRemovesStaleUnpacked"
+        ],
+        ["fs.rename(paths.shimAsar, paths.originalAsar)", "ApplyMovesOriginalAside"],
+        ["fs.exists(paths.unpacked)", "ApplyCopiesUnpacked"],
+        ["fs.copy(paths.unpacked, paths.originalUnpacked)", "ApplyCopiesUnpacked"],
+        ["fs.rename(nextShim, paths.shimAsar)", "ApplyPutsShimInPlace"],
+        ["fs.rename(paths.originalAsar, paths.shimAsar)", "ApplyPutsOriginalBack"]
+      ]
+    },
+    {
+      "file": "packages/cli/src/Install.ts",
+      "name": "removeShim",
+      "steps": [
+        ["asar.inspect(paths.shimAsar)", "UninstallStarts"],
+        ["fs.remove(paths.originalAsar, { force: true })", "UninstallRemovesLeftoverOriginal"],
+        [
+          "fs.remove(paths.originalUnpacked, { recursive: true, force: true })",
+          "UninstallRemovesLeftoverUnpacked"
+        ],
+        ["fs.exists(paths.originalAsar)", "UninstallStarts"],
+        ["fs.remove(paths.shimAsar)", "UninstallRemovesShim"],
+        ["fs.rename(paths.originalAsar, paths.shimAsar)", "UninstallRestoresOriginal"],
+        [
+          "fs.remove(paths.originalUnpacked, { recursive: true, force: true })",
+          "UninstallRemovesUnpackedCopy"
+        ]
+      ]
+    }
+  ],
+  "pcs": {
+    "a_pack": "ApplyPacksShim",
+    "a_removeOrig": "ApplyRemovesStaleOriginal",
+    "a_removeOrigUnp": "ApplyRemovesStaleUnpacked",
+    "a_renameToOrig": "ApplyMovesOriginalAside",
+    "a_copy": "ApplyCopiesUnpacked",
+    "a_renameShim": "ApplyPutsShimInPlace",
+    "a_rollback": "ApplyPutsOriginalBack",
+    "r_cleanOrig": "UninstallRemovesLeftoverOriginal",
+    "r_cleanOrigUnp": "UninstallRemovesLeftoverUnpacked",
+    "r_removeShim": "UninstallRemovesShim",
+    "r_renameOrig": "UninstallRestoresOriginal",
+    "r_removeOrigUnp": "UninstallRemovesUnpackedCopy"
+  },
+  "actions": {
+    "RepairStarts": "install or repair starts (applyShim) and inspects app.asar",
+    "RepairRefuses": "install or repair refuses to run",
+    "ApplyPacksShim": "applyShim packs the new shim into app.asar.t3mode-next",
+    "ApplyRemovesStaleOriginal": "applyShim deletes the stale _app.asar",
+    "ApplyRemovesStaleUnpacked": "applyShim deletes the stale _app.asar.unpacked",
+    "ApplyMovesOriginalAside": "applyShim renames app.asar to _app.asar",
+    "ApplyCopiesUnpacked": "applyShim copies app.asar.unpacked to _app.asar.unpacked",
+    "ApplyPutsShimInPlace": "applyShim renames app.asar.t3mode-next to app.asar",
+    "ApplyPutsOriginalBack": "applyShim's catch renames _app.asar back to app.asar",
+    "UninstallStarts": "uninstall starts (removeShim) and inspects app.asar",
+    "UninstallRefuses": "uninstall refuses to run",
+    "UninstallRemovesLeftoverOriginal": "removeShim deletes the leftover _app.asar",
+    "UninstallRemovesLeftoverUnpacked": "removeShim deletes the leftover _app.asar.unpacked",
+    "UninstallRemovesShim": "removeShim deletes app.asar (the shim)",
+    "UninstallRestoresOriginal": "removeShim renames _app.asar to app.asar",
+    "UninstallRemovesUnpackedCopy": "removeShim deletes _app.asar.unpacked",
+    "InstallerUpdates": "T3 Code's installer writes a new app.asar and app.asar.unpacked"
+  },
+  "expected": {
+    "Boots": "violated",
+    "Recoverable": "violated",
+    "KeepsOriginal": "holds",
+    "OnlyKnownBreaks": "holds"
+  }
+}

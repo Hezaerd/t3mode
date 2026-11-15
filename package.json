@@ -11,7 +11,8 @@
     "test": "vp test run",
     "lint": "vp lint --report-unused-disable-directives",
     "fmt": "vp fmt",
-    "fmt:check": "vp fmt --check"
+    "fmt:check": "vp fmt --check",
+    "verify:asar-swap": "node verification/asar-swap/check.ts"
   },
   "devDependencies": {
     "@effect/tsgo": "0.67.1",
