@@ -30,7 +30,9 @@ type Entry =
       readonly kind: "loaded";
       readonly definition: PluginDefinition;
     }
-  | { readonly info: InstalledPlugin; readonly kind: "broken"; readonly reason: string };
+  | { readonly info: InstalledPlugin; readonly kind: "broken"; readonly reason: string }
+  // Registered but never run: a plugin that is off runs none of its code, not even its top level.
+  | { readonly info: InstalledPlugin; readonly kind: "unloaded"; readonly load: () => unknown };
 
 export interface PluginRegistry {
   readonly push: (...registrations: ReadonlyArray<PluginRegistration>) => number;
@@ -105,7 +107,7 @@ export class Runtime {
         return registrations.length;
       },
     };
-    for (const plugin of installed) this.#entries.set(plugin.id, this.#load(plugin));
+    for (const plugin of installed) this.#entries.set(plugin.id, this.#entryFor(plugin));
   }
 
   get plugins(): ReadonlyArray<InstalledPlugin> {
@@ -121,6 +123,11 @@ export class Runtime {
   optionSpec(id: string): OptionsSpec {
     const entry = this.#entries.get(id);
     return entry?.kind === "loaded" ? entry.definition.options : {};
+  }
+
+  /** False until the plugin is first turned on, because its options are in its code. */
+  optionsKnown(id: string): boolean {
+    return this.#entries.get(id)?.kind === "loaded";
   }
 
   state(id: string): PluginState {
@@ -146,14 +153,14 @@ export class Runtime {
   startAll(): void {
     for (const entry of this.#entries.values()) {
       if (!this.isEnabled(entry.info.id)) continue;
-      if (entry.kind === "loaded") {
-        this.#start(entry.info.id);
-      } else {
+      if (entry.kind === "broken") {
         this.log("error", `Plugin ${entry.info.id} can't start: ${entry.reason}`);
         toast(
           `${entry.info.name} can't start. Open T3 Mode's plugins in Settings to see why.`,
           "error",
         );
+      } else {
+        this.#start(entry.info.id);
       }
     }
   }
@@ -192,7 +199,7 @@ export class Runtime {
         this.log("error", `Plugin ${info.id} could not be loaded: ${describe(error)}`);
       });
     }
-    this.#entries.set(info.id, this.#load(info));
+    this.#entries.set(info.id, this.#entryFor(info));
   }
 
   preview(input: string): Promise<PluginResult<PluginPreview>> {
@@ -300,12 +307,16 @@ export class Runtime {
     }
   }
 
-  #load(info: InstalledPlugin): Entry {
+  #entryFor(info: InstalledPlugin): Entry {
     if (info.error !== undefined) return { info, kind: "broken", reason: info.error };
     const load = this.#registrations.get(info.id);
     if (!load) {
       return { info, kind: "broken", reason: "Its code didn't run. See T3 Mode's log." };
     }
+    return this.isEnabled(info.id) ? this.#run(info, load) : { info, kind: "unloaded", load };
+  }
+
+  #run(info: InstalledPlugin, load: () => unknown): Entry {
     try {
       const definition = pluginDefinition(load());
       return definition
@@ -332,7 +343,7 @@ export class Runtime {
         this.log("error", `Plugin ${info.id} could not be loaded: ${describe(error)}`);
       }
     }
-    this.#entries.set(info.id, this.#load(info));
+    this.#entries.set(info.id, this.#entryFor(info));
     if (this.isEnabled(info.id)) this.#start(info.id);
     this.#emit();
     return result;
@@ -427,7 +438,12 @@ export class Runtime {
   }
 
   #start(id: string, storedOptions?: PluginSettings["options"]): void {
-    const entry = this.#entries.get(id);
+    let entry = this.#entries.get(id);
+    if (entry?.kind === "unloaded") {
+      entry = this.#run(entry.info, entry.load);
+      this.#entries.set(id, entry);
+      this.#emit();
+    }
     if (entry?.kind !== "loaded") return;
     const { definition } = entry;
     const cleanups: Array<() => void> = [];

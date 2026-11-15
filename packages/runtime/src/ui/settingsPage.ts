@@ -932,7 +932,9 @@ export class SettingsPage {
             null,
             h("p", {
               className: `${native.rowDescription} t3mode-empty`,
-              text: "This plugin has no options.",
+              text: runtime.optionsKnown(plugin.id)
+                ? "This plugin has no options."
+                : "Its options show once the plugin is on. T3 Mode runs none of a plugin's code while it is off.",
             }),
           ),
     );
