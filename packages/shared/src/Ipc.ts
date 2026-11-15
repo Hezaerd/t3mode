@@ -12,7 +12,20 @@ import type { Settings } from "./Settings.ts";
 import type { ShortcutAction, ShortcutStatus } from "./Shortcut.ts";
 import type { UpdateAction, UpdateStatus } from "./Updates.ts";
 
+export type SocketAction =
+  | { readonly _tag: "connect"; readonly plugin: string; readonly name: string }
+  | { readonly _tag: "write"; readonly id: number; readonly data: Uint8Array }
+  | { readonly _tag: "close"; readonly id: number };
+
+export type SocketEvent =
+  | { readonly _tag: "data"; readonly id: number; readonly data: Uint8Array }
+  | { readonly _tag: "closed"; readonly id: number; readonly error?: string };
+
 export const Channel = {
+  /** Page → main: a SocketAction on a local socket the plugin's manifest declares. */
+  socket: "t3mode:socket",
+  /** Main → page: a SocketEvent for a socket this page opened. */
+  socketEvent: "t3mode:socket-event",
   /** Preload → main: each loadable plugin's wrapped plugin.js, then renderer.js, re-read on every call. */
   pageScripts: "t3mode:page-scripts",
   /** Preload → main: one plugin's wrapped plugin.js, after an install or update. */
@@ -70,6 +83,12 @@ export interface Info {
 
 /** What the preload exposes on `window.t3modeNative`. */
 export interface NativeBridge {
+  readonly socket: {
+    readonly connect: (plugin: string, name: string) => Promise<PluginResult<number>>;
+    readonly write: (id: number, data: Uint8Array) => Promise<void>;
+    readonly close: (id: number) => Promise<void>;
+  };
+  readonly onSocketEvent: (listener: (event: SocketEvent) => void) => void;
   readonly log: (level: LogLevel, message: string) => Promise<void>;
   readonly ready: () => Promise<void>;
   readonly info: () => Promise<Info>;

@@ -140,7 +140,7 @@ Runs in the page, as one classic script with no imports. Plain TypeScript, no Ef
 
 **A plugin folder** holds two files. A GitHub release, an installed copy and a linked dev build all have the same two.
 
-- `manifest.json` is `{ "id", "name", "version", "description", "author"?, "api": 1 }`. `id` must match `^[a-z0-9][a-z0-9-]{0,63}$`, because it becomes a folder name, a settings key and a string in generated code. `version` is a semantic version, compared to find updates. `api` is the plugin API's major version, and t3mode refuses a plugin built for another one. The manifest is read without running any code, so the install prompt and the Plugins page can show it.
+- `manifest.json` is `{ "id", "name", "version", "description", "author"?, "sockets"?, "api": 1 }`. `id` must match `^[a-z0-9][a-z0-9-]{0,63}$`, because it becomes a folder name, a settings key and a string in generated code. `version` is a semantic version, compared to find updates. `api` is the plugin API's major version, and t3mode refuses a plugin built for another one. The manifest is read without running any code, so the install prompt and the Plugins page can show it.
 - `plugin.js` is a CommonJS bundle, at most 5 MiB, whose default export is `definePlugin({ options, start })`. Everything it imports is bundled in. The types and `definePlugin` come from `@t3mode/plugin-sdk`.
 
 ```ts
@@ -158,6 +158,12 @@ export default definePlugin({
   },
 });
 ```
+
+**Local sockets.** A manifest may declare `sockets`, an array of local socket names or prefixes ending in one trailing `*`, such as `["discord-ipc-*"]`. Names are 1 to 100 ASCII letters, digits, dots, underscores or hyphens, and start with a letter or digit. Invalid entries invalidate the manifest. The install prompt and plugin page show the declared access.
+
+`api.sockets.connect(name)` returns a `LocalSocket` with `name`, `write(Uint8Array)`, `close()`, `onData(callback)` and `onClose(callback)`. Main opens Windows named pipes and forwards bytes over `t3mode:socket` requests and `t3mode:socket-event` events. It accepts no page-supplied paths. There are at most eight connections per plugin and each write is at most 1 MiB. Plugin stop closes its sockets, including connections that finish after stop. Main closes an owner's connections on destruction, renderer exit and main-frame navigation, including reload.
+
+All plugins share the page, so main cannot verify which plugin is calling. The allowlist limits the page to sockets that some installed plugin declared and that the user saw at install. Updates can add socket names without a new prompt. This remains a known gap. Main contains only generic socket transport. Protocol logic belongs in plugins.
 
 **The lockfile.** `<home>/plugins.json` lists what's installed, as `{ "version": 1, "plugins": { "<id>": { "source", "version", "sha256"? } } }`. A source is one of two kinds.
 

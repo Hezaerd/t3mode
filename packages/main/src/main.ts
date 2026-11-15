@@ -18,6 +18,7 @@ import * as Files from "./Files.ts";
 import * as Home from "./Home.ts";
 import * as Ipc from "./Ipc.ts";
 import * as PluginDataStore from "./PluginDataStore.ts";
+import * as LocalSockets from "./LocalSockets.ts";
 import * as PluginHost from "./PluginHost.ts";
 import * as Preload from "./Preload.ts";
 import * as SettingsStore from "./SettingsStore.ts";
@@ -84,7 +85,7 @@ const MainLayer = Layer.mergeAll(
   BootGuard.layer,
   T3Keybindings.layer,
   Updater.layer(updaterOptions),
-  PluginHost.layer,
+  LocalSockets.layer.pipe(Layer.provideMerge(PluginHost.layer)),
 ).pipe(
   Layer.provideMerge(Layer.mergeAll(SettingsStore.layer, PluginDataStore.layer)),
   Layer.provideMerge(FileLogger.layer),
