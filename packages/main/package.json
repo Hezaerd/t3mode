@@ -1,0 +1,17 @@
+{
+  "name": "@t3mode/main",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vp pack",
+    "typecheck": "effect-tsgo tsc --noEmit -p ."
+  },
+  "devDependencies": {
+    "@t3mode/shared": "workspace:*",
+    "@types/node": "catalog:",
+    "effect": "catalog:",
+    "electron": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

@@ -1,6 +1,6 @@
 # t3mode architecture
 
-Status: **draft, nothing implemented yet.** Sections marked **Decision** are proposals waiting for a yes or a change.
+Status: **M1 done** (shim, loader, preload, test badge, CLI), verified on a sandbox copy of T3 Code `0.1.10-nightly.20261114.4669`. Decisions are recorded under **Decided**.
 
 ## Goal
 
@@ -17,21 +17,21 @@ Non-goals for v1: macOS support, loading third-party plugins at runtime, compute
 
 Checked on this machine against `0.1.10-nightly.20261114.4669`:
 
-| Fact | Value | Why it matters |
-|---|---|---|
-| Install dir | `%LOCALAPPDATA%\Programs\t3code\` | Per-user, so no admin rights are needed to swap files |
-| Entry | `app.asar` → `package.json` `main` = `apps/desktop/dist-electron/boot.cjs` | What the shim has to boot |
-| Other archives | `server.asar`, `app.asar.unpacked`, `wsl-runtime.tar.gz` | Leave them alone. Only `app.asar` is swapped |
-| Fuse `EnableEmbeddedAsarIntegrityValidation` | off | A swapped `app.asar` is accepted. **If upstream turns this on, the whole approach stops working.** |
-| Fuse `OnlyLoadAppFromAsar` | off | |
-| Fuse `RunAsNode` | on | `ELECTRON_RUN_AS_NODE=1` works, so helper scripts need no separate Node install |
-| `NODE_OPTIONS` fuse | on, but packaged Electron ignores `--require` | No way to inject without swapping the archive |
-| Windows | `sandbox: true`, `contextIsolation: true`, `nodeIntegration: false` | The preload is sandboxed. Plugins must be injected into the main world |
-| Page bridge | `window.desktopBridge` | T3 Code's own preload API. Read it, never replace it |
-| Updater | electron-updater, GitHub `pingdotgg/t3code`, channel `nightly`, cache `%LOCALAPPDATA%\t3code-updater\pending\` | |
-| Update off switch | env `T3CODE_DISABLE_AUTO_UPDATE` (in `apps/desktop/src/updates/DesktopUpdates.ts`) | Lets t3mode take over updates (see Updates) |
-| Nightly cadence | about every 6 h | Repairing after an update is an everyday path, not an edge case |
-| Stable DOM hooks | `data-*` attributes listed in T3 Code's theme guide (`[data-thread-details-card]`, `[data-chat-composer-form]`, …) | Prefer these over class names, which change between releases |
+| Fact                                         | Value                                                                                                              | Why it matters                                                                                     |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| Install dir                                  | `%LOCALAPPDATA%\Programs\t3code\`                                                                                  | Per-user, so no admin rights are needed to swap files                                              |
+| Entry                                        | `app.asar` → `package.json` `main` = `apps/desktop/dist-electron/boot.cjs`                                         | What the shim has to boot                                                                          |
+| Other archives                               | `server.asar`, `app.asar.unpacked`, `wsl-runtime.tar.gz`                                                           | Leave them alone. Only `app.asar` is swapped                                                       |
+| Fuse `EnableEmbeddedAsarIntegrityValidation` | off                                                                                                                | A swapped `app.asar` is accepted. **If upstream turns this on, the whole approach stops working.** |
+| Fuse `OnlyLoadAppFromAsar`                   | off                                                                                                                |                                                                                                    |
+| Fuse `RunAsNode`                             | on                                                                                                                 | `ELECTRON_RUN_AS_NODE=1` works, so helper scripts need no separate Node install                    |
+| `NODE_OPTIONS` fuse                          | on, but packaged Electron ignores `--require`                                                                      | No way to inject without swapping the archive                                                      |
+| Windows                                      | `sandbox: true`, `contextIsolation: true`, `nodeIntegration: false`                                                | The preload is sandboxed. Plugins must be injected into the main world                             |
+| Page bridge                                  | `window.desktopBridge`                                                                                             | T3 Code's own preload API. Read it, never replace it                                               |
+| Updater                                      | electron-updater, GitHub `pingdotgg/t3code`, channel `nightly`, cache `%LOCALAPPDATA%\t3code-updater\pending\`     |                                                                                                    |
+| Update off switch                            | env `T3CODE_DISABLE_AUTO_UPDATE` (in `apps/desktop/src/updates/DesktopUpdates.ts`)                                 | Lets t3mode take over updates (see Updates)                                                        |
+| Nightly cadence                              | about every 6 h                                                                                                    | Repairing after an update is an everyday path, not an edge case                                    |
+| Stable DOM hooks                             | `data-*` attributes listed in T3 Code's theme guide (`[data-thread-details-card]`, `[data-chat-composer-form]`, …) | Prefer these over class names, which change between releases                                       |
 
 Re-check all of this with `t3mode doctor` (see CLI) after big upstream releases.
 
@@ -69,10 +69,11 @@ flowchart LR
 
 The new `app.asar`. Kept tiny and rarely changed, because every change means reinstalling it.
 
-- Contains `package.json`, `index.js` and a `t3mode.json` marker holding the shim version.
-- `index.js` loads `%APPDATA%\t3mode\dist\main.js` **inside try/catch**. If loading fails, it logs the error and continues.
-- Then it always boots the original: `app.setAppPath(_app.asar)`, restore the original `name` and `version`, `require` the original `main`.
-- Honors a `SAFE_MODE` file and the env `T3MODE_DISABLE=1`, both of which skip the loader.
+- Contains `index.js`, a `t3mode.json` marker holding the shim version, and a `package.json` copied from the original with only `main` changed. Electron reads the app's name and version from the entry archive, so they stay T3 Code's.
+- `index.js` loads `%APPDATA%\t3mode\dist\main.cjs` **inside try/catch**. If loading fails, it writes `logs\shim.log` and continues.
+- Then it always boots the original: `app.setAppPath(_app.asar)`, then `require` the original `main`.
+- `T3MODE_DISABLE=1` skips the loader. `SAFE_MODE` is handled by the loader (below).
+- Bundled from `packages/shim` with no runtime dependencies and no Effect.
 
 Fixes a t3mod weakness: in t3mod, a broken loader keeps T3 Code from starting.
 
@@ -80,10 +81,17 @@ Fixes a t3mod weakness: in t3mod, a broken loader keeps T3 Code from starting.
 
 Runs in the main process before T3 Code's own code.
 
-1. **Crash guard.** Two window crashes within 60 s write `SAFE_MODE`. The next launch skips the mod once, but **keeps the update orchestrator running**, so an update during safe mode doesn't silently uninstall t3mode.
-2. **Settings and state.** JSON files written atomically (write a temp file, then rename). Schema version and migrations.
+Everything here runs **synchronously** (`Effect.runSync` over sync file access), because the shim boots T3 Code right after `require` returns. IPC handlers and the preload hook must exist before T3 Code opens its window.
+
+1. **Safe mode.** Two triggers, each skipping t3mode for one launch:
+   - the `SAFE_MODE` file (`pnpm t3mode safe`, or two renderer crashes within 60 s);
+   - two launches in a row that never reported `ready` from the page (`state.json` counts them).
+
+   From M3, safe mode will still run the update orchestrator, so an update during safe mode doesn't silently uninstall t3mode.
+
+2. **Settings and state.** JSON files written atomically (write a temp file, then rename), decoded with `Schema`.
 3. **IPC.** `t3mode:*` handlers. Every handler checks that the call comes from the main frame of the main T3 Code window. The surface is small and allowlisted.
-4. **Preload registration** through `session.registerPreloadScript`, applied to the main window only.
+4. **Preload registration** through `session.registerPreloadScript` on every session. The preload itself exits outside the main window.
 5. **Update orchestrator** (see Updates).
 6. **Boot the original**, always, even when steps 1 to 5 fail.
 
@@ -100,7 +108,7 @@ Runs in the page.
 - Starts and stops plugins and keeps settings in memory.
 - **Disposables.** Everything a plugin creates (CSS, observers, listeners, DOM nodes, timers) is registered with its API and undone in reverse order when the plugin stops.
 - **Fault isolation covers sync and async errors.** API callbacks are wrapped, `api.async()` attributes rejected promises to the plugin, and the runtime watches `unhandledrejection`. A plugin that fails is stopped, its changes are undone and a toast reports it. t3mod only isolates sync errors.
-- **Compatibility gate.** Each plugin declares the selectors it needs. If they aren't found within a timeout, the plugin is marked *incompatible with T3 Code vX*, not left half-applied.
+- **Compatibility gate.** Each plugin declares the selectors it needs. If they aren't found within a timeout, the plugin is marked _incompatible with T3 Code vX_, not left half-applied.
 - **Settings page.** Adds a "t3mode" entry to T3 Code's settings navigation, plus a hotkey fallback (Ctrl+Alt+M) in case injection fails.
 - **Hot reload.** `renderer.js` is re-read on each page reload, so `pnpm dev` only needs Ctrl+R.
 
@@ -112,7 +120,9 @@ export default definePlugin({
   name: "Thread details collapsed by default",
   requires: [sel.threadDetailsCard],
   options: { rememberManualOpen: { type: "boolean", default: true } },
-  start(api) { /* … */ },
+  start(api) {
+    /* … */
+  },
 });
 ```
 
@@ -124,14 +134,18 @@ export default definePlugin({
 
 `pnpm t3mode <command>`, run from the repo in v1:
 
-| Command | Does |
-|---|---|
-| `install` | Wait for T3 Code to close, rename `app.asar` to `_app.asar`, copy `app.asar.unpacked`, write the shim, copy `dist/`, relaunch |
-| `uninstall` | Restore the original, keep `%APPDATA%\t3mode` unless `--purge` |
-| `repair` | Re-apply the shim after an update overwrote it |
-| `status` | Installed? Shim version, T3 Code version, mod enabled, last errors |
-| `safe` | Next launch without the mod |
-| `doctor` | Re-check every fact in *Facts about the target* (fuses, entry path, updater config) |
+| Command     | Does                                                                                                                          |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `install`   | Wait for T3 Code to close, rename `app.asar` to `_app.asar`, copy `app.asar.unpacked`, write the shim, copy `dist/`, relaunch |
+| `uninstall` | Restore the original, keep `%APPDATA%\t3mode` unless `--purge`                                                                |
+| `repair`    | Re-apply the shim after an update overwrote it                                                                                |
+| `status`    | Installed? Shim version, T3 Code version, mod enabled, last errors                                                            |
+| `deploy`    | Copy freshly built bundles into the home (renderer changes then need only Ctrl+R)                                             |
+| `sandbox`   | Copy T3 Code to `.sandbox/`, install there with its own data folders, start it with DevTools on port 9333                     |
+| `safe`      | Next launch without the mod                                                                                                   |
+| `doctor`    | (M4) Re-check every fact in _Facts about the target_ (fuses, entry path, updater config)                                      |
+
+`install`, `repair` and `uninstall` refuse to run while T3 Code is open (`--wait` waits for it to close). The new shim is built before anything is moved, and a failed swap puts the original back.
 
 **Foreign shims.** If `app.asar` carries a t3mod or Vencord-style marker that isn't ours, `install` refuses and explains, instead of stacking shims.
 
@@ -139,9 +153,9 @@ export default definePlugin({
 
 Every T3 Code update rewrites `app.asar`, which removes the shim. At one nightly every ~6 h, this path is the one that has to be reliable.
 
-**Decision: who installs T3 Code updates.**
+**Decided: A.** The options as weighed:
 
-- **A. t3mode owns updates (recommended).** The loader sets `T3CODE_DISABLE_AUTO_UPDATE=1` before T3 Code's main runs, so T3 Code's updater stays idle. t3mode checks the same GitHub nightly feed, downloads the installer and **verifies its Authenticode signature (publisher "T3 Tools Inc")**. When T3 Code quits, a small detached helper:
+- **A. t3mode owns updates (chosen).** The loader sets `T3CODE_DISABLE_AUTO_UPDATE=1` before T3 Code's main runs, so T3 Code's updater stays idle. t3mode checks the same GitHub nightly feed, downloads the installer and **verifies its Authenticode signature (publisher "T3 Tools Inc")**. When T3 Code quits, a small detached helper:
   1. waits for T3 Code to exit,
   2. runs the installer silently and waits for **that process**,
   3. re-applies the shim,
@@ -149,6 +163,7 @@ Every T3 Code update rewrites `app.asar`, which removes the shim. At one nightly
 
   The helper knows exactly which installer it's waiting for, and no vanilla T3 Code runs in between.
   Cost: t3mode re-implements check and download, and T3 Code's own update button shows "disabled".
+
 - **B. Guardian (t3mod's approach).** Leave T3 Code's updater on. On quit, if an installer is pending, spawn a watcher that guesses when the installer finished, kills the relaunched vanilla T3 Code, re-swaps and relaunches. Less code. It relies on guessing ("any exe started from %TEMP%"), and it races the installer's own relaunch.
 
 In both, the helper is a PowerShell script. It can't be T3 Code's exe in Node mode, because the installer has to overwrite that exe while the helper is running. `pnpm t3mode repair` stays the manual fallback.
@@ -158,36 +173,43 @@ In both, the helper is a PowerShell script. It can't be T3 Code's exe in Node mo
 ```
 t3mode/
   packages/
-    shim/        app.asar content (index.js, package.json, t3mode.json)
-    main/        loader, crash guard, IPC, settings, updates
-    preload/     bridge and injection
-    runtime/     plugin lifecycle, API, settings page
-    plugins/     one folder per plugin, plus selectors.ts
-    cli/         install, uninstall, repair, status, safe, doctor
-    shared/      IPC contract types, paths, settings schema
-  scripts/       build.ts (esbuild), dev.ts (watch + deploy)
+    shared/      file layout, IPC contract, version (no runtime deps; bundled into each layer)
+    shim/        app.asar entry -> dist/index.cjs
+    main/        loader: safe mode, IPC, preload hook, file log -> dist/main.cjs   (updates: M3)
+    preload/     bridge and injection -> dist/preload.cjs
+    runtime/     page code -> dist/renderer.iife.js   (plugin runtime and settings page: M2)
+    cli/         install, repair, uninstall, deploy, status, safe, sandbox (run from source)
+    plugins/     (M2) one folder per plugin, plus selectors.ts
   docs/
-  test/
+  .sandbox/      dev copy of T3 Code (git-ignored)
 ```
 
-**Decision: stack.** TypeScript, pnpm workspaces, esbuild (one bundle per layer), vitest. Same family of tools as T3 Code itself.
+**Decided: stack, matching T3 Code's own repo** (`pingdotgg/t3code`):
+
+- TypeScript run natively by Node (type stripping), `tsconfig.base.json` copied from T3 Code.
+- **Effect 4.1.3** and `@effect/platform-node` in the loader and the CLI, written in T3 Code's style: `Context.Service` classes, `Layer`, `Effect.fn`, `Schema.TaggedError`, `effect/cli`, `effect/process`.
+- **effect-tsgo** typechecks with T3 Code's Effect language-service rules (`tsconfig.effect.json`, copied).
+- **vite-plus 1.4.0** (`vp`): `vp pack` (tsdown) bundles each layer, `vp test` (vitest), `vp lint` (oxlint), `vp fmt` (oxfmt).
+- pnpm 12 workspaces with a catalog pinned to T3 Code's versions.
+- No Effect in the shim (it must never fail) or the preload (sandboxed and tiny). Whether the page runtime uses Effect is decided in M2.
 
 ## Testing
 
-- **Unit (vitest).** Runtime lifecycle and disposables, settings migrations, asar swap logic on a fake install dir, update helper state machine.
+- **Unit (vitest).** Now: safe-mode decisions, and the asar swap on a fake install (install, refresh, re-apply after an update, uninstall, refusing another mod). Later: runtime lifecycle and disposables, settings migrations, update helper state machine.
+- **Sandbox.** `pnpm t3mode sandbox`, then DevTools on port 9333. M1 was verified there: badge injected, `desktopBridge` intact, a crashing loader still lets T3 Code boot (error in `shim.log`), `safe` skips one launch, `uninstall` restores the original.
 - **DOM (vitest + happy-dom).** Plugins against saved HTML snapshots of T3 Code screens.
 - **Compat canary (later).** A scheduled job pulls the latest nightly, extracts `app.asar`, runs `doctor` checks, and checks each plugin's `requires` selectors against the real UI. Then breakage shows up in CI before it shows up on the desktop.
 
 ## Milestones
 
-1. **M0.** Repo and this design. ← now
-2. **M1.** Shim, loader, crash guard, logs, CLI `install` / `uninstall` / `repair` / `status`, and a "hello" plugin (a badge in the corner). Proven on the real app.
-3. **M2.** Runtime, plugin API, settings page, then the two real plugins.
-4. **M3.** Update handling (option A or B).
+1. **M0.** Repo and this design. ✔
+2. **M1.** Shim, loader, crash guard, logs, CLI `install` / `uninstall` / `repair` / `status`, and a "hello" plugin (a badge in the corner). ✔ Proven on a sandbox copy of the real app.
+3. **M2.** Runtime, plugin API, settings page, then the two real plugins. ← next
+4. **M3.** Update handling (option A). Until then, every T3 Code update removes the shim: run `pnpm t3mode repair`.
 5. **M4.** Doctor, compat canary, DOM snapshot tests.
 
 ## Open questions
 
-- **Reusing t3mod.** Borrow code from your friend's t3mod (needs their permission and a license), or write it from scratch and keep only the lessons?
-- **Who uses it.** Just you, installed from the repo, or packaged later so others can install it?
+Settled: written from scratch (t3mod only informs the design), and for personal use, installed from the repo.
+
 - **Weekly usage data.** Copy it from the DOM (v1), or read it from `desktopBridge` or T3 Code's server connection if that data is exposed there?
