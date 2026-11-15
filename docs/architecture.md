@@ -207,7 +207,7 @@ The runtime calls `load()` inside its fault isolation, so an error in a plugin's
 | `deploy`    | Copy freshly built bundles into the home (renderer changes then need only Ctrl+R)                                             |
 | `sandbox`   | Copy T3 Code to `.sandbox/`, install there with its own data folders, start it with DevTools on port 9333                     |
 | `safe`      | Next launch without the mod                                                                                                   |
-| `plugin`    | `list`, `add <link>` (asks first, `--yes` skips), `update [id]`, `remove <id>`, `link <folder>` for a plugin in development    |
+| `plugin`    | `list`, `add <link>` (asks first, `--yes` skips), `update [id]`, `remove <id>`, `link <folder>` for a plugin in development   |
 | `status`    | Also shows a downloaded update waiting to install, and the update helper's last log lines                                     |
 | `doctor`    | (M4) Re-check every fact in _Facts about the target_ (fuses, entry path, updater config)                                      |
 

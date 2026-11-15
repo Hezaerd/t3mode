@@ -8,6 +8,11 @@ export const DISABLE_ENV = "T3MODE_DISABLE";
 export const SANDBOX_APPDATA_ENV = "T3MODE_SANDBOX_APPDATA";
 /** Dev sandbox only: a stand-in installer. The sandbox never runs T3 Code's real installer. */
 export const SANDBOX_INSTALLER_ENV = "T3MODE_SANDBOX_INSTALLER";
+/** Replaces https://github.com for plugin installs, for tests and the sandbox. */
+export const GITHUB_URL_ENV = "T3MODE_GITHUB_URL";
+
+export const githubUrl = (env: Readonly<Record<string, string | undefined>>): string =>
+  env[GITHUB_URL_ENV]?.trim() || "https://github.com";
 
 /** File names inside T3 Code's `resources` folder. */
 export const Resources = {
@@ -55,6 +60,10 @@ export interface HomeLayout {
   /** The verified installer waiting to be installed. */
   readonly updateReady: string;
   readonly updateLog: string;
+  /** Installed GitHub plugins, one folder per id. */
+  readonly plugins: string;
+  /** plugins.json: what is installed, from where, and the hash of its code. */
+  readonly pluginsLock: string;
 }
 
 export const resolveHomeRoot = (
@@ -96,5 +105,7 @@ export const homeLayout = (root: string): HomeLayout => {
     updates: NodePath.join(root, "updates"),
     updateReady: NodePath.join(root, "updates", "ready.json"),
     updateLog: NodePath.join(logs, "update.log"),
+    plugins: NodePath.join(root, "plugins"),
+    pluginsLock: NodePath.join(root, "plugins.json"),
   };
 };

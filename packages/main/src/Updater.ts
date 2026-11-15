@@ -31,7 +31,7 @@ import type { UpdatePhase, UpdateStatus } from "@t3mode/shared/Updates";
 import { Files } from "./Files.ts";
 import { helperArguments, launcherCommand } from "./HelperLaunch.ts";
 import { Home } from "./Home.ts";
-import { compareVersions } from "./Semver.ts";
+import { compareVersions } from "@t3mode/shared/Semver";
 import { SettingsStore } from "./SettingsStore.ts";
 import { SignatureJson, signatureCommand } from "./Signature.ts";
 import {
