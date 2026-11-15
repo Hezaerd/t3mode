@@ -1,0 +1,13 @@
+{
+  "name": "t3mode-plugin-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vp pack"
+  },
+  "devDependencies": {
+    "@t3mode/plugin-sdk": "^1.0.0",
+    "vite-plus": "1.4.0"
+  },
+  "packageManager": "pnpm@12.14.0"
+}
