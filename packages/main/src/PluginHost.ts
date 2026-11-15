@@ -32,6 +32,7 @@ export const PluginActionSchema = Schema.Union([
 export class PluginHost extends Context.Service<
   PluginHost,
   {
+    readonly list: Effect.Effect<ReadonlyArray<InstalledPlugin>>;
     readonly pageScripts: Effect.Effect<ReadonlyArray<PageScript>>;
     readonly pluginScript: (id: unknown) => Effect.Effect<PageScript | null, Schema.SchemaError>;
     readonly act: (input: unknown) => Effect.Effect<unknown, Schema.SchemaError>;
@@ -106,6 +107,7 @@ export const make = Effect.gen(function* () {
   });
 
   return PluginHost.of({
+    list,
     pageScripts,
     pluginScript: Effect.fn("PluginHost.pluginScript")(function* (input: unknown) {
       const id = yield* Schema.decodeUnknownEffect(PluginStore.PluginIdSchema)(input);
