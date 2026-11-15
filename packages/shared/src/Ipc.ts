@@ -27,7 +27,9 @@ export const Channel = {
   info: "t3mode:info",
   /** Page → main: settings.json, or defaults when missing or invalid. */
   readSettings: "t3mode:read-settings",
+  /** Page → main: every plugin's `plugin-data/<id>.json`, read once at startup. */
   readPluginData: "t3mode:read-plugin-data",
+  /** Page → main: replace one plugin's `plugin-data/<id>.json`. */
   writePluginData: "t3mode:write-plugin-data",
   /** Page → main: replace settings.json. */
   writeSettings: "t3mode:write-settings",
