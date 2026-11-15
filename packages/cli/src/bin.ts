@@ -14,6 +14,7 @@ import { FetchHttpClient } from "effect/http";
 import {
   GITHUB_URL_ENV,
   HOME_ENV,
+  T3_UPDATER_OFF_ENV,
   SANDBOX_APPDATA_ENV,
   SANDBOX_INSTALLER_ENV,
   githubUrl,
@@ -24,6 +25,7 @@ import { T3MODE_VERSION } from "@t3mode/shared/Version";
 
 import * as Artifacts from "./Artifacts.ts";
 import * as AsarArchive from "./Asar.ts";
+import * as Doctor from "./Doctor.ts";
 import * as Install from "./Install.ts";
 import * as LegacyHome from "./LegacyHome.ts";
 import * as Processes from "./Processes.ts";
@@ -179,6 +181,14 @@ const status = Command.make(
   }),
 ).pipe(Command.withDescription("Show what is installed and the last log lines"));
 
+const doctor = Command.make(
+  "doctor",
+  {},
+  Effect.fn(function* () {
+    yield* Doctor.run(yield* target);
+  }),
+).pipe(Command.withDescription("Check T3 Code compatibility"));
+
 const safe = Command.make(
   "safe",
   {},
@@ -259,7 +269,7 @@ const sandbox = Command.make(
       APPDATA: path.join(dir, "appdata"),
       T3CODE_HOME: path.join(dir, "t3home"),
       // An update installed from the sandbox would target the real install folder.
-      T3CODE_DISABLE_AUTO_UPDATE: "1",
+      [T3_UPDATER_OFF_ENV]: "1",
     });
     yield* Console.log(`Sandbox started. DevTools: http://127.0.0.1:${options.port}/json`);
   }),
@@ -400,7 +410,17 @@ const MainLayer = Layer.mergeAll(AsarArchive.layer, FetchHttpClient.layer).pipe(
 );
 
 root.pipe(
-  Command.withSubcommands([install, repair, uninstall, deploy, status, safe, sandbox, plugin]),
+  Command.withSubcommands([
+    install,
+    repair,
+    uninstall,
+    deploy,
+    status,
+    doctor,
+    safe,
+    sandbox,
+    plugin,
+  ]),
   Command.run({ version: T3MODE_VERSION }),
   Effect.provide(MainLayer),
   NodeRuntime.runMain,
