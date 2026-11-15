@@ -668,6 +668,12 @@ export class SettingsPage {
         className: native.rowDescription,
         text: `${by}github.com/${sourceLabel(source)}`,
       }),
+      manifest.sockets
+        ? h("p", {
+            className: native.rowDescription,
+            text: `Can connect to local sockets: ${manifest.sockets.join(", ")}`,
+          })
+        : null,
       manifest.description
         ? h("p", { className: native.rowDescription, text: manifest.description })
         : null,
@@ -906,6 +912,9 @@ export class SettingsPage {
         plugin.name,
         null,
         group(
+          ...(plugin.sockets
+            ? [row({ description: `Can connect to local sockets: ${plugin.sockets.join(", ")}` })]
+            : []),
           row({ title: "Enabled", description: plugin.description, control: toggle }),
           row({
             title: "Status",
