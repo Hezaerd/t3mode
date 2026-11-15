@@ -56,7 +56,6 @@ const FILTERS = [
 
 type Tone = "active" | "waiting" | "failed" | "off";
 
-/** The "Install from GitHub" box: reading a link, a release waiting for a yes, or why it failed. */
 type InstallStep =
   | { readonly kind: "idle" }
   | { readonly kind: "reading" }
@@ -64,10 +63,6 @@ type InstallStep =
   | { readonly kind: "confirm"; readonly preview: PluginPreview }
   | { readonly kind: "installing"; readonly preview: PluginPreview };
 
-/**
- * Retry reads a plugin that couldn't load from disk again, which helps after its code is fixed or
- * a linked plugin is rebuilt. An installed copy with wrong files needs installing again instead.
- */
 const canRetry = (runtime: Runtime, plugin: InstalledPlugin): boolean => {
   const kind = runtime.state(plugin.id).kind;
   return (
@@ -78,7 +73,6 @@ const canRetry = (runtime: Runtime, plugin: InstalledPlugin): boolean => {
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
-/** Disables `control` while `action` runs, so a second click can't start it twice. */
 const busy = async (control: HTMLButtonElement, action: () => Promise<void>): Promise<void> => {
   control.disabled = true;
   try {
@@ -650,7 +644,6 @@ export class SettingsPage {
     }
   }
 
-  /** What the user is about to trust, shown before anything is downloaded beyond the manifest. */
   #confirmPanel(preview: PluginPreview, installing: boolean): HTMLElement {
     const { manifest, source } = preview;
     const confirm = button({

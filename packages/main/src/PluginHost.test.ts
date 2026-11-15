@@ -56,7 +56,6 @@ describe("PluginActionSchema", () => {
   });
 });
 
-// The loader builds its layers with Effect.runSync, so the host must not wait on anything.
 const build = (layout: ReturnType<typeof homeLayout>) =>
   Effect.runSync(
     make.pipe(
@@ -78,7 +77,6 @@ describe("PluginHost", () => {
     for (const root of roots.splice(0)) NodeFs.rmSync(root, { recursive: true, force: true });
   });
 
-  /** A home with renderer.js deployed and one linked plugin. */
   const home = () => {
     const root = NodeFs.mkdtempSync(NodePath.join(NodeOs.tmpdir(), "t3mode-host-"));
     roots.push(root);
@@ -129,7 +127,7 @@ describe("PluginHost", () => {
     expect(listed.map((plugin) => plugin.id)).toEqual(["dev"]);
     expect(await Effect.runPromise(host.act({ _tag: "remove", id: "missing" }))).toEqual({
       ok: true,
-      value: false,
+      value: "not-installed",
     });
     expect(await Effect.runPromise(host.act({ _tag: "update", id: "dev" }))).toEqual({
       ok: false,

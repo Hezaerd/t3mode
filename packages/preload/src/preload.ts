@@ -22,7 +22,6 @@ const GUARD = "__t3modePreloaded";
 const describe = (error: unknown) =>
   error instanceof Error ? (error.stack ?? error.message) : String(error);
 
-/** One script per call, so a script that doesn't parse can't stop the others. */
 const runScript = async (script: PageScript): Promise<void> => {
   await webFrame.executeJavaScript(`${script.code}\n//# sourceURL=${script.name}`);
 };
@@ -65,20 +64,21 @@ const start = (): void => {
   contextBridge.exposeInMainWorld("t3modeNative", bridge);
   const logError = (message: string) => bridge.log("error", message).catch(() => undefined);
 
-  // In order, waiting for each, so every plugin has registered before renderer.js starts them.
-  void ipcRenderer.invoke(Channel.pageScripts).then(
-    (scripts: ReadonlyArray<PageScript>) =>
-      scripts.reduce<Promise<unknown>>(
-        (previous, script) =>
-          previous.then(() =>
-            runScript(script).catch((error: unknown) =>
-              logError(`${script.name} failed: ${describe(error)}`),
-            ),
+  const runEachInOrder = (scripts: ReadonlyArray<PageScript>) =>
+    scripts.reduce<Promise<unknown>>(
+      (previous, script) =>
+        previous.then(() =>
+          runScript(script).catch((error: unknown) =>
+            logError(`${script.name} failed: ${describe(error)}`),
           ),
-        Promise.resolve(),
-      ),
-    (error: unknown) => logError(`Could not read the page scripts: ${describe(error)}`),
-  );
+        ),
+      Promise.resolve(),
+    );
+  void ipcRenderer
+    .invoke(Channel.pageScripts)
+    .then(runEachInOrder, (error: unknown) =>
+      logError(`Could not read the page scripts: ${describe(error)}`),
+    );
 };
 
 start();

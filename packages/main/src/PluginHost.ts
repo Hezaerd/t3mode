@@ -32,10 +32,8 @@ export const PluginActionSchema = Schema.Union([
 export class PluginHost extends Context.Service<
   PluginHost,
   {
-    /** Each loadable plugin, then renderer.js. Never fails: the page must always get the runtime. */
     readonly pageScripts: Effect.Effect<ReadonlyArray<PageScript>>;
     readonly pluginScript: (id: unknown) => Effect.Effect<PageScript | null, Schema.SchemaError>;
-    /** Runs a decoded PluginAction. A failure the user can act on comes back as a PluginResult. */
     readonly act: (input: unknown) => Effect.Effect<unknown, Schema.SchemaError>;
   }
 >()("@t3mode/main/PluginHost") {}
@@ -54,7 +52,6 @@ export const make = Effect.gen(function* () {
   const files = yield* Files;
   const { layout } = yield* Home;
   const store = yield* PluginStore.make({ layout, githubBase: githubUrl(process.env) });
-  // Found by the last check, until the next one. A plugin updated since compares equal and drops out.
   let updates: Readonly<Record<string, string>> = {};
 
   const withUpdate = (plugin: InstalledPlugin): InstalledPlugin => {

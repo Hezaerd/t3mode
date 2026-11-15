@@ -250,8 +250,6 @@ const sandbox = Command.make(
   }),
 ).pipe(Command.withDescription("Run t3mode on a private copy of T3 Code, for development"));
 
-// Plugins need only the t3mode home, so these commands work without T3 Code, and while it's
-// closed. A running T3 Code picks up a change on its next reload (Ctrl+R).
 const pluginStore = Effect.gen(function* () {
   const flags = yield* root;
   const layout = yield* Target.resolveHome(flags.home);
@@ -353,7 +351,9 @@ const pluginRemove = Command.make(
   Effect.fn(function* (options) {
     const removed = yield* (yield* pluginStore).remove(options.id);
     yield* Console.log(
-      removed ? `Removed ${options.id}. ${RELOAD}` : `${options.id} is not installed.`,
+      removed === "removed"
+        ? `Removed ${options.id}. ${RELOAD}`
+        : `${options.id} is not installed.`,
     );
   }),
 ).pipe(Command.withDescription("Remove a plugin"));

@@ -18,7 +18,6 @@ import { homeLayout } from "./Layout.ts";
 import * as PluginStore from "./PluginStore.ts";
 import { type GithubSource, MAX_PLUGIN_CODE_BYTES } from "./Plugins.ts";
 
-/** Release assets by URL path, as GitHub serves them. Chunks are sent without a length. */
 const assets = new Map<string, string | Uint8Array | ReadonlyArray<Uint8Array>>();
 let server: NodeHttp.Server;
 let base = "";
@@ -60,7 +59,6 @@ const manifest = (fields: Record<string, unknown> = {}) =>
 
 const CODE = "module.exports = { options: {}, start() {} };\n";
 
-/** Publishes a release: the latest one, or the one at `tag`. */
 const publish = (
   repo: string,
   files: {
@@ -83,7 +81,6 @@ const sha256 = (text: string) => NodeCrypto.createHash("sha256").update(text).di
 
 const PlatformLayer = Layer.mergeAll(NodeFileSystem.layer, NodePath.layer, FetchHttpClient.layer);
 
-/** Runs `body` against a store in a fresh temp home. */
 const withStore = <A, E>(
   body: (context: {
     readonly store: PluginStore.PluginStore["Service"];
@@ -228,13 +225,13 @@ describe("PluginStore", () => {
   it("treats an id named like an Object property as any other id", () =>
     withStore(({ store }) =>
       Effect.gen(function* () {
-        expect(yield* store.remove("constructor")).toBe(false);
+        expect(yield* store.remove("constructor")).toBe("not-installed");
         publish("someone/odd", { manifest: manifest({ id: "constructor" }), code: CODE });
         yield* store.preview("someone/odd");
         const installed = yield* store.install(github("someone/odd"), "constructor");
         expect(installed.error).toBeUndefined();
         expect(yield* store.checkUpdates).toEqual({ updates: {}, failures: {} });
-        expect(yield* store.remove("constructor")).toBe(true);
+        expect(yield* store.remove("constructor")).toBe("removed");
       }),
     ));
 
@@ -319,17 +316,17 @@ describe("PluginStore", () => {
       Effect.gen(function* () {
         publish("someone/my-plugin", { manifest: manifest(), code: CODE });
         yield* store.install(github("someone/my-plugin"), "my-plugin");
-        expect(yield* store.remove("my-plugin")).toBe(true);
+        expect(yield* store.remove("my-plugin")).toBe("removed");
         expect(yield* store.list).toEqual([]);
         expect(yield* fs.exists(path.join(home.plugins, "my-plugin"))).toBe(false);
-        expect(yield* store.remove("my-plugin")).toBe(false);
+        expect(yield* store.remove("my-plugin")).toBe("not-installed");
 
         const folder = path.join(home.root, "dev");
         yield* fs.makeDirectory(folder, { recursive: true });
         yield* fs.writeFileString(path.join(folder, "manifest.json"), manifest());
         yield* fs.writeFileString(path.join(folder, "plugin.js"), CODE);
         yield* store.link(folder);
-        expect(yield* store.remove("my-plugin")).toBe(true);
+        expect(yield* store.remove("my-plugin")).toBe("removed");
         expect(yield* fs.exists(path.join(folder, "plugin.js"))).toBe(true);
       }),
     ));

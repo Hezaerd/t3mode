@@ -1,9 +1,5 @@
 // Starts and stops plugins. Everything a plugin creates goes through its API and is undone,
 // newest first, when it stops. A plugin that throws is stopped and reported; the others keep running.
-//
-// Each installed plugin's code arrives before this runs: the preload ran its wrapped plugin.js,
-// which pushed a registration onto `window.__t3modePlugins` without running the plugin itself.
-// The runtime takes those over, and loads each one inside the same fault isolation as `start`.
 import type { OptionsSpec, PluginApi, PluginDefinition, PluginReport } from "@t3mode/plugin-sdk";
 import type { Info, NativeBridge } from "@t3mode/shared/Ipc";
 import type {
@@ -11,6 +7,7 @@ import type {
   PluginPreview,
   PluginRegistration,
   PluginResult,
+  RemoveResult,
 } from "@t3mode/shared/Plugins";
 import type { PluginSettings, Settings } from "@t3mode/shared/Settings";
 import type { ShortcutAction, ShortcutStatus } from "@t3mode/shared/Shortcut";
@@ -25,10 +22,8 @@ export type PluginState =
   | { readonly kind: "off" }
   | { readonly kind: "running"; readonly report: PluginReport | null }
   | { readonly kind: "failed"; readonly error: string }
-  /** Its code can't be loaded, so it never started. */
   | { readonly kind: "unavailable"; readonly reason: string };
 
-/** An installed plugin with its definition, or the reason it has none. */
 type Entry =
   | {
       readonly info: InstalledPlugin;
@@ -37,14 +32,13 @@ type Entry =
     }
   | { readonly info: InstalledPlugin; readonly kind: "broken"; readonly reason: string };
 
-/** What `window.__t3modePlugins` is once the runtime owns it. Before that, it's an array. */
 export interface PluginRegistry {
   readonly push: (...registrations: ReadonlyArray<PluginRegistration>) => number;
 }
 
 declare global {
   interface Window {
-    __t3modePlugins?: PluginRegistry;
+    __t3modePlugins?: PluginRegistry | Array<PluginRegistration>;
   }
 }
 
@@ -61,7 +55,6 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 const isDefinition = (value: unknown): value is PluginDefinition =>
   isObject(value) && typeof value["start"] === "function" && isObject(value["options"]);
 
-/** The definition in a plugin's exports: `module.exports = definition` or `exports.default`. */
 export const pluginDefinition = (exported: unknown): PluginDefinition | undefined => {
   const candidate = isObject(exported) && !isDefinition(exported) ? exported["default"] : exported;
   return isDefinition(candidate) ? candidate : undefined;
@@ -115,7 +108,6 @@ export class Runtime {
     for (const plugin of installed) this.#entries.set(plugin.id, this.#load(plugin));
   }
 
-  /** Installed plugins, by name. */
   get plugins(): ReadonlyArray<InstalledPlugin> {
     return [...this.#entries.values()]
       .map((entry) => entry.info)
@@ -126,7 +118,6 @@ export class Runtime {
     return this.#entries.get(id)?.info;
   }
 
-  /** The plugin's options; empty when its code didn't load. */
   optionSpec(id: string): OptionsSpec {
     const entry = this.#entries.get(id);
     return entry?.kind === "loaded" ? entry.definition.options : {};
@@ -138,7 +129,6 @@ export class Runtime {
     return this.#states.get(id) ?? { kind: "off" };
   }
 
-  /** Installed plugins are on unless the user turned them off. */
   isEnabled(id: string): boolean {
     return this.#settings.plugins[id]?.enabled ?? true;
   }
@@ -183,50 +173,45 @@ export class Runtime {
     await this.#save(id, { options });
   }
 
-  /**
-   * Restarts a plugin. One that couldn't load is read from disk again first, so a linked plugin
-   * picks up a rebuild that fixed it.
-   */
   async retry(id: string): Promise<void> {
     const entry = this.#entries.get(id);
     if (!entry) return;
     this.#stop(id);
     this.#states.delete(id);
-    if (entry.kind === "broken") {
-      const listed = await this.#native.plugins.list().catch(() => undefined);
-      const info = listed?.find((plugin) => plugin.id === id) ?? entry.info;
-      if (info.error === undefined) {
-        this.#registrations.delete(id);
-        await this.#native.loadPlugin(id).catch((error: unknown) => {
-          this.log("error", `Plugin ${id} could not be loaded: ${describe(error)}`);
-        });
-      }
-      this.#entries.set(id, this.#load(info));
-    }
+    if (entry.kind === "broken") await this.#rereadFromDisk(entry.info);
     if (this.isEnabled(id)) this.#start(id);
     this.#emit();
   }
 
-  // --- installing -----------------------------------------------------------------------------
+  async #rereadFromDisk(previous: InstalledPlugin): Promise<void> {
+    const listed = await this.#native.plugins.list().catch(() => undefined);
+    const info = listed?.find((plugin) => plugin.id === previous.id) ?? previous;
+    if (info.error === undefined) {
+      this.#registrations.delete(info.id);
+      await this.#native.loadPlugin(info.id).catch((error: unknown) => {
+        this.log("error", `Plugin ${info.id} could not be loaded: ${describe(error)}`);
+      });
+    }
+    this.#entries.set(info.id, this.#load(info));
+  }
 
   preview(input: string): Promise<PluginResult<PluginPreview>> {
     return this.#ask("Preview", () => this.#native.plugins.preview(input));
   }
 
-  /** Installs the release the user confirmed, and starts it without a reload. */
   async install(preview: PluginPreview): Promise<PluginResult<InstalledPlugin>> {
     const result = await this.#ask("Install", () =>
       this.#native.plugins.install(preview.source, preview.manifest.id),
     );
-    return this.#adopt(result);
+    return this.#loadAndStart(result);
   }
 
   async updatePlugin(id: string): Promise<PluginResult<InstalledPlugin>> {
     const result = await this.#ask("Update", () => this.#native.plugins.update(id));
-    return this.#adopt(result);
+    return this.#loadAndStart(result);
   }
 
-  async remove(id: string): Promise<PluginResult<boolean>> {
+  async remove(id: string): Promise<PluginResult<RemoveResult>> {
     const result = await this.#ask("Remove", () => this.#native.plugins.remove(id));
     if (result.ok) {
       this.#stop(id);
@@ -238,7 +223,6 @@ export class Runtime {
     return result;
   }
 
-  /** Fills in `update` on each plugin with a newer release. Updates nothing. */
   async checkUpdates(): Promise<PluginResult<ReadonlyArray<InstalledPlugin>>> {
     const result = await this.#ask("Check", () => this.#native.plugins.checkUpdates());
     const listed = result.ok
@@ -251,8 +235,6 @@ export class Runtime {
     this.#emit();
     return result;
   }
-
-  // --- T3 Mode itself -------------------------------------------------------------------------
 
   /** T3 Mode's shortcut in T3 Code's keybindings.json; "unavailable" when that fails. */
   async shortcut(action: ShortcutAction): Promise<ShortcutStatus> {
@@ -310,8 +292,6 @@ export class Runtime {
     void this.#native.log(level, message).catch(() => undefined);
   }
 
-  // --- internals ------------------------------------------------------------------------------
-
   #register(item: unknown): void {
     if (isObject(item) && typeof item["id"] === "string" && typeof item["load"] === "function") {
       this.#registrations.set(item["id"], item["load"] as () => unknown);
@@ -320,7 +300,6 @@ export class Runtime {
     }
   }
 
-  /** Runs the plugin's registered code and takes its definition. Nothing here may throw. */
   #load(info: InstalledPlugin): Entry {
     if (info.error !== undefined) return { info, kind: "broken", reason: info.error };
     const load = this.#registrations.get(info.id);
@@ -338,8 +317,9 @@ export class Runtime {
     }
   }
 
-  /** After an install or update: run the new code, swap it in, and start it if it's on. */
-  async #adopt(result: PluginResult<InstalledPlugin>): Promise<PluginResult<InstalledPlugin>> {
+  async #loadAndStart(
+    result: PluginResult<InstalledPlugin>,
+  ): Promise<PluginResult<InstalledPlugin>> {
     if (!result.ok) return result;
     const info = result.value;
     this.#stop(info.id);
@@ -358,7 +338,6 @@ export class Runtime {
     return result;
   }
 
-  /** A plugin action through main. A failed call is a failure for the user, not an exception. */
   async #ask<A>(action: string, call: () => Promise<PluginResult<A>>): Promise<PluginResult<A>> {
     try {
       return await call();

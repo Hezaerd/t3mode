@@ -1,18 +1,21 @@
 // The contract between the preload and the main process.
-import type { GithubSource, InstalledPlugin, PluginPreview, PluginResult } from "./Plugins.ts";
+import type {
+  GithubSource,
+  InstalledPlugin,
+  PluginPreview,
+  PluginResult,
+  RemoveResult,
+} from "./Plugins.ts";
 import type { Settings } from "./Settings.ts";
 import type { ShortcutAction, ShortcutStatus } from "./Shortcut.ts";
 import type { UpdateAction, UpdateStatus } from "./Updates.ts";
 
 export const Channel = {
-  /**
-   * Preload → main: the scripts to run in the page, in order. Each loadable plugin, wrapped so
-   * it only registers itself, then renderer.js. Re-read from disk on every call.
-   */
+  /** Preload → main: each loadable plugin's wrapped plugin.js, then renderer.js, re-read on every call. */
   pageScripts: "t3mode:page-scripts",
-  /** Preload → main: one plugin's wrapped script, or null, after an install or update. */
+  /** Preload → main: one plugin's wrapped plugin.js, after an install or update. */
   pluginScript: "t3mode:plugin-script",
-  /** Page → main: a PluginAction. */
+  /** Page → main: a PluginAction. Main accepts only GitHub sources from the page. */
   plugins: "t3mode:plugins",
   /** Page → main: one log line for the t3mode log file. */
   log: "t3mode:log",
@@ -36,7 +39,6 @@ export const Channel = {
 
 export const RENDERER_SCRIPT_NAME = "t3mode-renderer.js";
 
-/** The Plugins page's requests. Main decodes each one, and accepts only GitHub sources. */
 export type PluginAction =
   | { readonly _tag: "list" }
   | { readonly _tag: "preview"; readonly input: string }
@@ -73,16 +75,12 @@ export interface NativeBridge {
   /** Calls `listener` with each new update status. */
   readonly onUpdate: (listener: (status: UpdateStatus) => void) => void;
   readonly plugins: {
-    /** Every installed plugin, with `update` filled in after a check. */
     readonly list: () => Promise<ReadonlyArray<InstalledPlugin>>;
     readonly preview: (input: string) => Promise<PluginResult<PluginPreview>>;
     readonly install: (source: GithubSource, id: string) => Promise<PluginResult<InstalledPlugin>>;
     readonly update: (id: string) => Promise<PluginResult<InstalledPlugin>>;
-    /** False when it wasn't installed. */
-    readonly remove: (id: string) => Promise<PluginResult<boolean>>;
-    /** The list after the check. An error names the plugins whose check failed. */
+    readonly remove: (id: string) => Promise<PluginResult<RemoveResult>>;
     readonly checkUpdates: () => Promise<PluginResult<ReadonlyArray<InstalledPlugin>>>;
   };
-  /** Runs a plugin's current code in the page, so it registers again. Rejects when it can't. */
   readonly loadPlugin: (id: string) => Promise<void>;
 }

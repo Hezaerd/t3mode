@@ -34,7 +34,6 @@ const defaultHome = Effect.gen(function* () {
   return path.join(yield* Config.String("APPDATA"), "t3mode");
 });
 
-/** The t3mode home alone, for commands that need no T3 Code install. */
 export const resolveHome = Effect.fn("Target.resolveHome")(
   function* (home: Option.Option<string>) {
     const path = yield* Path.Path;

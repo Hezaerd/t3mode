@@ -8,7 +8,7 @@ import {
   parseGithubSource,
   pluginScriptName,
   releaseAssetUrl,
-  sameSource,
+  sameRepoOrFolder,
   sourceLabel,
   wrapPluginCode,
 } from "./Plugins.ts";
@@ -102,15 +102,14 @@ describe("sources", () => {
     const github = { kind: "github", owner: "Owner", repo: "Repo" } as const;
     expect(sourceLabel({ ...github, tag: "v2" })).toBe("Owner/Repo@v2");
     expect(sourceLabel({ kind: "local", path: "C:\\dev\\p" })).toBe("linked from C:\\dev\\p");
-    expect(sameSource(github, { kind: "github", owner: "owner", repo: "repo", tag: "v1" })).toBe(
-      true,
-    );
-    expect(sameSource(github, { kind: "github", owner: "owner", repo: "other" })).toBe(false);
-    expect(sameSource(github, { kind: "local", path: "Owner/Repo" })).toBe(false);
+    expect(
+      sameRepoOrFolder(github, { kind: "github", owner: "owner", repo: "repo", tag: "v1" }),
+    ).toBe(true);
+    expect(sameRepoOrFolder(github, { kind: "github", owner: "owner", repo: "other" })).toBe(false);
+    expect(sameRepoOrFolder(github, { kind: "local", path: "Owner/Repo" })).toBe(false);
   });
 });
 
-/** Runs a page script in a fresh context with a fake `window`, as the preload does. */
 const runInPage = (code: string, window: Record<string, unknown> = {}) => {
   NodeVm.runInNewContext(code, { window });
   return window["__t3modePlugins"] as Array<PluginRegistration>;

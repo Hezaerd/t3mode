@@ -17,7 +17,7 @@ export default definePlugin({
     },
   },
   start(api) {
-    // CSS styles React's nodes without touching them. It is removed when the plugin stops.
+    // CSS styles React's nodes without touching them.
     api.css(
       `${COMPOSER.join(", ")} { outline: 2px solid var(--${api.options.color}); outline-offset: 2px; }`,
     );

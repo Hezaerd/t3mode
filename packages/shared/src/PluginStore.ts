@@ -1,7 +1,4 @@
 // plugins.json and the plugin folders in the t3mode home (see "Plugins" in docs/architecture.md).
-// Used by main and by the CLI, so it is written against Effect's FileSystem, Path and HttpClient
-// only. Each install writes plugin.js, then manifest.json, then the lockfile entry, so a crash
-// midway leaves the old install or a hash mismatch, never a plugin that loads half-updated code.
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -34,15 +31,15 @@ import {
   PLUGIN_FILES,
   PLUGIN_ID_PATTERN,
   type PluginPreview,
+  type RemoveResult,
   pluginScriptName,
   releaseAssetUrl,
-  sameSource,
+  sameRepoOrFolder,
   sourceLabel,
   wrapPluginCode,
 } from "./Plugins.ts";
 import { compareVersions, parseVersion } from "./Semver.ts";
 
-/** A failure the user can act on. The message is shown as is. */
 export class PluginError extends Schema.TaggedError<PluginError>()("PluginError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect()),
@@ -100,7 +97,6 @@ const LockfileJson = Schema.fromJsonString(LockfileSchema);
 
 const EMPTY_LOCK: Lockfile = { version: 1, plugins: {} };
 
-/** Newer versions found by a check, and the plugins whose check failed, by id. */
 export interface UpdateCheck {
   readonly updates: Readonly<Record<string, string>>;
   readonly failures: Readonly<Record<string, string>>;
@@ -108,31 +104,22 @@ export interface UpdateCheck {
 
 export interface PluginStoreOptions {
   readonly layout: HomeLayout;
-  /** `https://github.com`, or a stand-in (GITHUB_URL_ENV). */
   readonly githubBase: string;
 }
 
 export class PluginStore extends Context.Service<
   PluginStore,
   {
-    /** Everything in plugins.json. A plugin that can't be loaded has `error`. */
     readonly list: Effect.Effect<ReadonlyArray<InstalledPlugin>>;
-    /** The wrapped code of one loadable plugin. */
     readonly script: (id: string) => Effect.Effect<PageScript | undefined>;
-    /** The wrapped code of every loadable plugin, by name. */
     readonly scripts: Effect.Effect<ReadonlyArray<PageScript>>;
-    /** Reads a release's manifest for the install prompt. Installs nothing. */
     readonly preview: (input: string) => Effect.Effect<PluginPreview, PluginError>;
-    /** Installs a release, refusing it unless its manifest still has `expectedId`. */
     readonly install: (
       source: GithubSource,
       expectedId: string,
     ) => Effect.Effect<InstalledPlugin, PluginError>;
-    /** Installs the latest release of an unpinned GitHub plugin. */
     readonly update: (id: string) => Effect.Effect<InstalledPlugin, PluginError>;
-    /** False when the plugin wasn't installed. */
-    readonly remove: (id: string) => Effect.Effect<boolean, PluginError>;
-    /** Adds a plugin folder in development, read from where it is on every load. CLI only. */
+    readonly remove: (id: string) => Effect.Effect<RemoveResult, PluginError>;
     readonly link: (path: string) => Effect.Effect<InstalledPlugin, PluginError>;
     readonly checkUpdates: Effect.Effect<UpdateCheck, PluginError>;
   }
@@ -160,7 +147,6 @@ const megabytes = (bytes: number) => `${Math.round(bytes / 1024 / 1024)} MB`;
 const describeSchemaError = (error: Schema.SchemaError) =>
   error.message.replaceAll(/\s*\n\s*/g, " ");
 
-/** Checks what Schema can't: the API version, and that the id is the one expected. */
 const checkManifest = (manifest: Manifest, where: string, expectedId?: string) => {
   if (manifest.api !== PLUGIN_API_VERSION) {
     return Effect.fail(
@@ -186,10 +172,9 @@ const failed = (plugin: InstalledPlugin, error: string) => ({
   code: undefined,
 });
 
-/** Refuses an id that is already installed from another repo or folder. */
 const checkConflict = (current: Lockfile, id: string, source: LockEntry["source"]) => {
   const existing = lockEntry(current, id);
-  return existing && !sameSource(existing.source, source)
+  return existing && !sameRepoOrFolder(existing.source, source)
     ? Effect.fail(
         new PluginError({
           message: `A plugin with the id "${id}" is already installed (${sourceLabel(existing.source)}). Remove it first.`,
@@ -207,8 +192,6 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
   const { layout } = options;
   const lock = yield* Semaphore.make(1);
   const decoder = new TextDecoder();
-
-  // --- files --------------------------------------------------------------------------------
 
   const writeAtomic = Effect.fn("PluginStore.writeAtomic")(
     function* (file: string, bytes: Uint8Array) {
@@ -245,10 +228,19 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
     yield* writeAtomic(layout.pluginsLock, new TextEncoder().encode(`${text}\n`));
   });
 
+  // An interrupted install leaves the old copy or a hash mismatch, never half-updated code that loads.
+  const writeCodeThenManifestThenLock = Effect.fn("PluginStore.writeCodeThenManifestThenLock")(
+    function* (id: string, code: Uint8Array, manifest: Uint8Array, next: Lockfile) {
+      const folder = path.join(layout.plugins, id);
+      yield* writeAtomic(path.join(folder, PLUGIN_FILES.code), code);
+      yield* writeAtomic(path.join(folder, PLUGIN_FILES.manifest), manifest);
+      yield* writeLock(next);
+    },
+  );
+
   const folderOf = (id: string, entry: LockEntry) =>
     entry.source.kind === "github" ? path.join(layout.plugins, id) : entry.source.path;
 
-  /** The installed copy of one plugin, its code when it can be loaded, or why it can't. */
   const inspect = Effect.fn("PluginStore.inspect")(function* (id: string, entry: LockEntry) {
     const base: InstalledPlugin = {
       id,
@@ -314,8 +306,6 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
     name: pluginScriptName(id),
     code: wrapPluginCode(id, decoder.decode(code)),
   });
-
-  // --- GitHub -------------------------------------------------------------------------------
 
   const download = Effect.fn("PluginStore.download")(function* (
     source: GithubSource,
@@ -389,11 +379,11 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
     yield* checkConflict(current, manifest.id, source);
     const { bytes: code } = yield* download(source, PLUGIN_FILES.code, MAX_PLUGIN_CODE_BYTES);
     const sha256 = yield* sha256Hex(code);
-    const folder = path.join(layout.plugins, manifest.id);
-    yield* writeAtomic(path.join(folder, PLUGIN_FILES.code), code);
-    yield* writeAtomic(path.join(folder, PLUGIN_FILES.manifest), manifestBytes);
     const entry: LockEntry = { source, version: manifest.version, sha256 };
-    yield* writeLock({ ...current, plugins: { ...current.plugins, [manifest.id]: entry } });
+    yield* writeCodeThenManifestThenLock(manifest.id, code, manifestBytes, {
+      ...current,
+      plugins: { ...current.plugins, [manifest.id]: entry },
+    });
     yield* Effect.logInfo(`Installed ${manifest.id} ${manifest.version} from ${release}`);
     return (yield* inspect(manifest.id, entry)).plugin;
   });
@@ -440,7 +430,7 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
   const remove = Effect.fn("PluginStore.remove")(function* (id: string) {
     const current = yield* readLock;
     const entry = lockEntry(current, id);
-    if (!entry) return false;
+    if (!entry) return "not-installed" as const;
     const plugins = Object.fromEntries(
       Object.entries(current.plugins).filter(([key]) => key !== id),
     );
@@ -451,7 +441,7 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
         .pipe(Effect.mapError(fail(`Could not delete ${path.join(layout.plugins, id)}.`)));
     }
     yield* Effect.logInfo(`Removed ${id}`);
-    return true;
+    return "removed" as const;
   }, withLock);
 
   const link = Effect.fn("PluginStore.link")(function* (input: string) {
