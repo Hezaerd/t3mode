@@ -422,6 +422,16 @@ root.pipe(
     plugin,
   ]),
   Command.run({ version: T3MODE_VERSION }),
+  // runMain's process.exit, while fetch is still closing its sockets, aborts Node on Windows.
+  Effect.catchTag("PluginError", (error) =>
+    Console.error(error.message).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          process.exitCode = 1;
+        }),
+      ),
+    ),
+  ),
   Effect.provide(MainLayer),
   NodeRuntime.runMain,
 );
