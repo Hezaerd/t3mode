@@ -6,7 +6,12 @@
 //
 // The pane is React's. t3mode adds its page as the pane's last child and hides React's
 // children with CSS while it is open, so React's nodes are never moved or removed.
-import { type InstalledPlugin, type PluginPreview, sourceLabel } from "@t3mode/shared/Plugins";
+import {
+  type InstalledPlugin,
+  type PluginPreview,
+  type PluginOffer,
+  sourceLabel,
+} from "@t3mode/shared/Plugins";
 import { T3_HOOKS, hookSelector } from "@t3mode/shared/T3Hooks";
 
 import { h } from "../dom.ts";
@@ -61,8 +66,17 @@ type InstallStep =
   | { readonly kind: "idle" }
   | { readonly kind: "reading" }
   | { readonly kind: "failed"; readonly error: string }
-  | { readonly kind: "confirm"; readonly preview: PluginPreview }
-  | { readonly kind: "installing"; readonly preview: PluginPreview };
+  | {
+      readonly kind: "confirm";
+      readonly preview: PluginPreview;
+      readonly installed: ReadonlyArray<string>;
+    }
+  | {
+      readonly kind: "installing";
+      readonly preview: PluginPreview;
+      readonly installed: ReadonlyArray<string>;
+      readonly id: string;
+    };
 
 const canRetry = (runtime: Runtime, plugin: InstalledPlugin): boolean => {
   const kind = runtime.state(plugin.id).kind;
@@ -641,43 +655,73 @@ export class SettingsPage {
         return;
       case "confirm":
       case "installing":
-        box.replaceChildren(this.#confirmPanel(step.preview, step.kind === "installing"));
+        box.replaceChildren(this.#confirmPanel(step));
     }
   }
 
-  #confirmPanel(preview: PluginPreview, installing: boolean): HTMLElement {
-    const { manifest, source } = preview;
-    const confirm = button({
-      text: installing ? "Installing…" : "Install",
-      icon: "download",
-      variant: "outline",
-      onClick: () => void this.#install(preview),
+  #confirmPanel(step: Extract<InstallStep, { kind: "confirm" | "installing" }>): HTMLElement {
+    const { preview, installed } = step;
+    const installing = step.kind === "installing";
+    let firstReady = true;
+    let singleConfirm: HTMLButtonElement | null = null;
+    const offers = preview.offers.map((offer) => {
+      if (offer.kind === "unavailable") {
+        return h(
+          "div",
+          {},
+          h("h3", { className: native.rowTitle, text: offer.id }),
+          h("p", { className: "t3mode-install-error", text: offer.reason }),
+        );
+      }
+      const { manifest, source } = offer;
+      const done = installed.includes(manifest.id);
+      const confirm = button({
+        text: done
+          ? "Installed"
+          : installing && step.id === manifest.id
+            ? "Installing…"
+            : "Install",
+        icon: "download",
+        variant: "outline",
+        onClick: () => void this.#install(preview, offer, installed),
+      });
+      if (firstReady) confirm.id = "t3mode-plugin-confirm";
+      firstReady = false;
+      confirm.disabled = installing || done;
+      if (preview.offers.length === 1) singleConfirm = confirm;
+      const by = manifest.author ? `by ${manifest.author} · ` : "";
+      return h(
+        "div",
+        { attrs: { "aria-label": `Install ${manifest.name}` } },
+        h("h3", { className: native.rowTitle, text: `${manifest.name} ${manifest.version}` }),
+        h("p", {
+          className: native.rowDescription,
+          text: `${by}github.com/${sourceLabel(source)}`,
+        }),
+        manifest.sockets
+          ? h("p", {
+              className: native.rowDescription,
+              text: `Can connect to local sockets: ${manifest.sockets.join(", ")}`,
+            })
+          : null,
+        manifest.description
+          ? h("p", { className: native.rowDescription, text: manifest.description })
+          : null,
+        preview.offers.length > 1 ? confirm : null,
+      );
     });
-    confirm.id = "t3mode-plugin-confirm";
-    confirm.disabled = installing;
-    const cancel = button({ text: "Cancel", onClick: () => this.#setStep({ kind: "idle" }) });
+    const allInstalled = preview.offers.every(
+      (offer) => offer.kind === "unavailable" || installed.includes(offer.manifest.id),
+    );
+    const cancel = button({
+      text: allInstalled ? "Done" : "Cancel",
+      onClick: () => this.#setStep({ kind: "idle" }),
+    });
     cancel.disabled = installing;
-    const by = manifest.author ? `by ${manifest.author} · ` : "";
     return h(
       "div",
-      {
-        className: `${native.card} t3mode-confirm`,
-        attrs: { "aria-label": `Install ${manifest.name}` },
-      },
-      h("h3", { className: native.rowTitle, text: `${manifest.name} ${manifest.version}` }),
-      h("p", {
-        className: native.rowDescription,
-        text: `${by}github.com/${sourceLabel(source)}`,
-      }),
-      manifest.sockets
-        ? h("p", {
-            className: native.rowDescription,
-            text: `Can connect to local sockets: ${manifest.sockets.join(", ")}`,
-          })
-        : null,
-      manifest.description
-        ? h("p", { className: native.rowDescription, text: manifest.description })
-        : null,
+      { className: `${native.card} t3mode-confirm` },
+      ...offers,
       h(
         "p",
         { className: "t3mode-warning" },
@@ -686,7 +730,7 @@ export class SettingsPage {
           text: "A plugin gets full access to T3 Code, including your threads. Install it only if you trust its author.",
         }),
       ),
-      h("div", { className: "t3mode-actions" }, confirm, cancel),
+      h("div", { className: "t3mode-actions" }, singleConfirm, cancel),
     );
   }
 
@@ -697,17 +741,31 @@ export class SettingsPage {
     const result = await this.#runtime.preview(input);
     this.#setStep(
       result.ok
-        ? { kind: "confirm", preview: result.value }
+        ? { kind: "confirm", preview: result.value, installed: [] }
         : { kind: "failed", error: result.error },
     );
     if (result.ok) document.getElementById("t3mode-plugin-confirm")?.focus();
   }
 
-  async #install(preview: PluginPreview): Promise<void> {
-    this.#setStep({ kind: "installing", preview });
-    const result = await this.#runtime.install(preview);
+  async #install(
+    preview: PluginPreview,
+    offer: Extract<PluginOffer, { kind: "ready" }>,
+    installed: ReadonlyArray<string>,
+  ): Promise<void> {
+    this.#setStep({ kind: "installing", preview, installed, id: offer.manifest.id });
+    const result = await this.#runtime.install(offer.source, offer.manifest.id);
     if (!result.ok) {
-      this.#setStep({ kind: "failed", error: result.error });
+      if (preview.offers.length === 1) {
+        this.#setStep({ kind: "failed", error: result.error });
+        return;
+      }
+      this.#setStep({ kind: "confirm", preview, installed });
+      toast(result.error, "error");
+      return;
+    }
+    if (preview.offers.length > 1) {
+      this.#setStep({ kind: "confirm", preview, installed: [...installed, offer.manifest.id] });
+      toast(`${result.value.name} ${result.value.version} is installed.`, "info");
       return;
     }
     this.#link = "";

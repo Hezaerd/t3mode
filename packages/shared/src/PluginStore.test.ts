@@ -62,13 +62,22 @@ const CODE = "module.exports = { options: {}, start() {} };\n";
 const publish = (
   repo: string,
   files: {
-    readonly manifest: string;
+    readonly manifest?: string;
+    readonly registry?: Record<string, string>;
+    readonly plugins?: Record<string, { readonly manifest?: string; readonly code?: string }>;
     readonly code?: string | Uint8Array | ReadonlyArray<Uint8Array>;
   },
   tag?: string,
 ) => {
   const release = tag === undefined ? "releases/latest/download" : `releases/download/${tag}`;
-  assets.set(`/${repo}/${release}/manifest.json`, files.manifest);
+  if (files.manifest !== undefined) assets.set(`/${repo}/${release}/manifest.json`, files.manifest);
+  if (files.registry !== undefined)
+    assets.set(`/${repo}/${release}/t3mode.json`, JSON.stringify({ plugins: files.registry }));
+  for (const [id, plugin] of Object.entries(files.plugins ?? {})) {
+    if (plugin.manifest !== undefined)
+      assets.set(`/${repo}/${release}/${id}.manifest.json`, plugin.manifest);
+    if (plugin.code !== undefined) assets.set(`/${repo}/${release}/${id}.plugin.js`, plugin.code);
+  }
   if (files.code !== undefined) assets.set(`/${repo}/${release}/plugin.js`, files.code);
 };
 
@@ -106,17 +115,183 @@ const failure = <A>(effect: Effect.Effect<A, PluginStore.PluginError>) =>
   );
 
 describe("PluginStore", () => {
+  it("previews registry offers independently and prefers a standalone manifest", () =>
+    withStore(({ store }) =>
+      Effect.gen(function* () {
+        publish("someone/mono", {
+          registry: { alpha: "a/dist", missing: "b/dist", wrong: "c/dist" },
+          plugins: {
+            alpha: { manifest: manifest({ id: "alpha" }), code: CODE },
+            wrong: { manifest: manifest({ id: "other" }) },
+          },
+        });
+        const preview = yield* store.preview("someone/mono");
+        expect(preview.repo).toEqual(github("someone/mono"));
+        expect(preview.offers).toEqual([
+          {
+            kind: "ready",
+            source: { ...github("someone/mono"), plugin: "alpha" },
+            manifest: JSON.parse(manifest({ id: "alpha" })),
+          },
+          {
+            kind: "unavailable",
+            id: "missing",
+            reason: expect.stringContaining(
+              "No missing.manifest.json in the latest release of someone/mono. Check the link, and that the release has missing.manifest.json and missing.plugin.js.",
+            ),
+          },
+          {
+            kind: "unavailable",
+            id: "wrong",
+            reason: expect.stringContaining('"other" instead of "wrong"'),
+          },
+        ]);
+        publish("someone/mono", { manifest: manifest() });
+        expect((yield* store.preview("someone/mono")).offers).toEqual([
+          { kind: "ready", source: github("someone/mono"), manifest: JSON.parse(manifest()) },
+        ]);
+      }),
+    ));
+
+  it("installs and updates registry assets while retaining their source", () =>
+    withStore(({ store, fs, home, path }) =>
+      Effect.gen(function* () {
+        const source = { ...github("someone/mono"), plugin: "alpha" };
+        publish("someone/mono", {
+          registry: { alpha: "a/dist" },
+          plugins: { alpha: { manifest: manifest({ id: "alpha" }), code: CODE } },
+        });
+        yield* store.install(source, "alpha");
+        expect(JSON.parse(yield* fs.readFileString(home.pluginsLock)).plugins.alpha.source).toEqual(
+          source,
+        );
+        expect(yield* fs.readFileString(path.join(home.plugins, "alpha", "plugin.js"))).toBe(CODE);
+        publish("someone/mono", {
+          plugins: {
+            alpha: {
+              manifest: manifest({ id: "alpha", version: "2.0.0" }),
+              code: "module.exports = {};",
+            },
+          },
+        });
+        expect(yield* store.checkUpdates).toEqual({ updates: { alpha: "2.0.0" }, failures: {} });
+        expect((yield* store.update("alpha")).version).toBe("2.0.0");
+        assets.delete("/someone/mono/releases/latest/download/alpha.manifest.json");
+        expect(yield* store.checkUpdates).toEqual({
+          updates: {},
+          failures: { alpha: expect.stringContaining("No alpha.manifest.json") },
+        });
+      }),
+    ));
+
+  it("rejects invalid and empty registries", () =>
+    withStore(({ store }) =>
+      Effect.gen(function* () {
+        for (const registry of [
+          { "Bad Key": "dist" },
+          { alpha: "../dist" },
+          { alpha: "/dist" },
+          { alpha: "a\\dist" },
+          { alpha: "a//dist" },
+          { alpha: "a/./dist" },
+          { alpha: "" },
+          { alpha: "C:/dist" },
+          {},
+          Object.fromEntries(Array.from({ length: 51 }, (_, i) => [`plugin-${i}`, `plugins/${i}`])),
+        ]) {
+          publish("someone/mono", { registry });
+          expect(yield* failure(store.preview("someone/mono"))).toContain("Invalid t3mode.json");
+        }
+      }),
+    ));
+
+  it("rejects unreadable, malformed and oversized registry downloads", () =>
+    withStore(({ store }) =>
+      Effect.gen(function* () {
+        assets.set("/someone/mono/releases/latest/download/t3mode.json", "{ invalid");
+        expect(yield* failure(store.preview("someone/mono"))).toContain("Invalid t3mode.json");
+        assets.set("/someone/mono/releases/latest/download/t3mode.json", " ".repeat(65537));
+        expect(yield* failure(store.preview("someone/mono"))).toContain("larger than 64 KB");
+      }),
+    ));
+
+  it("keeps API, decode and source conflicts local to registry offers", () =>
+    withStore(({ store }) =>
+      Effect.gen(function* () {
+        publish("someone/original", { manifest: manifest({ id: "taken" }), code: CODE });
+        yield* store.install(github("someone/original"), "taken");
+        publish("someone/mono", {
+          registry: { taken: "taken", incompatible: "incompatible", broken: "broken" },
+          plugins: {
+            taken: { manifest: manifest({ id: "taken" }) },
+            incompatible: { manifest: manifest({ id: "incompatible", api: 2 }) },
+            broken: { manifest: "{}" },
+          },
+        });
+        expect((yield* store.preview("someone/mono")).offers).toEqual([
+          {
+            kind: "unavailable",
+            id: "taken",
+            reason: expect.stringContaining("already installed"),
+          },
+          {
+            kind: "unavailable",
+            id: "incompatible",
+            reason: expect.stringContaining("plugin API 2"),
+          },
+          { kind: "unavailable", id: "broken", reason: expect.stringContaining("manifest.json") },
+        ]);
+      }),
+    ));
+
+  it("links every registry route and leaves the lock unchanged when one fails", () =>
+    withStore(({ store, fs, path, home }) =>
+      Effect.gen(function* () {
+        const folder = yield* fs.makeTempDirectoryScoped();
+        for (const id of ["alpha", "beta"]) {
+          yield* fs.makeDirectory(path.join(folder, id, "dist"), { recursive: true });
+          yield* fs.writeFileString(
+            path.join(folder, id, "dist", "manifest.json"),
+            manifest({ id }),
+          );
+          yield* fs.writeFileString(path.join(folder, id, "dist", "plugin.js"), CODE);
+        }
+        const registry = path.join(folder, "t3mode.json");
+        yield* fs.writeFileString(
+          registry,
+          JSON.stringify({ plugins: { alpha: "alpha/dist", beta: "missing/dist" } }),
+        );
+        expect(yield* failure(store.link(folder))).toContain("no readable manifest.json");
+        expect(yield* fs.exists(home.pluginsLock)).toBe(false);
+        yield* fs.writeFileString(
+          registry,
+          JSON.stringify({ plugins: { alpha: "alpha/dist", beta: "beta/dist" } }),
+        );
+        expect((yield* store.link(folder)).map((plugin) => plugin.id)).toEqual(["alpha", "beta"]);
+        const lock = yield* fs.readFileString(home.pluginsLock);
+        yield* fs.writeFileString(
+          path.join(folder, "beta", "dist", "manifest.json"),
+          manifest({ id: "wrong" }),
+        );
+        expect(yield* failure(store.link(folder))).toContain('"wrong" instead of "beta"');
+        expect(yield* fs.readFileString(home.pluginsLock)).toBe(lock);
+      }),
+    ));
+
   it("previews a release without installing it", () =>
     withStore(({ store, fs, home }) =>
       Effect.gen(function* () {
         publish("someone/my-plugin", { manifest: manifest(), code: CODE });
         const preview = yield* store.preview("https://github.com/someone/my-plugin");
-        expect(preview.source).toEqual(github("someone/my-plugin"));
-        expect(preview.manifest).toMatchObject({ id: "my-plugin", version: "1.0.0", api: 1 });
+        expect(preview.repo).toEqual(github("someone/my-plugin"));
+        expect(preview.offers[0]).toMatchObject({ kind: "ready" });
+        expect(
+          preview.offers[0]?.kind === "ready" ? preview.offers[0].manifest : undefined,
+        ).toMatchObject({ id: "my-plugin", version: "1.0.0", api: 1 });
         expect(yield* fs.exists(home.pluginsLock)).toBe(false);
         expect(yield* failure(store.preview("not a link"))).toContain("not a GitHub repository");
         expect(yield* failure(store.preview("someone/missing"))).toContain(
-          "No manifest.json in the latest release of someone/missing.",
+          "No manifest.json or t3mode.json in the latest release of someone/missing.",
         );
       }),
     ));
@@ -177,7 +352,7 @@ describe("PluginStore", () => {
         publish("someone/my-plugin", { manifest: manifest(), code: CODE });
         const preview = yield* store.preview("someone/my-plugin");
         publish("someone/my-plugin", { manifest: manifest({ id: "other-plugin" }), code: CODE });
-        const message = yield* failure(store.install(preview.source, preview.manifest.id));
+        const message = yield* failure(store.install(preview.repo, "my-plugin"));
         expect(message).toContain('"other-plugin" instead of "my-plugin"');
         expect(yield* fs.exists(home.pluginsLock)).toBe(false);
         expect(yield* fs.exists(home.plugins)).toBe(false);
@@ -272,9 +447,9 @@ describe("PluginStore", () => {
         expect(yield* failure(store.link(folder))).toContain("has no plugin.js");
         yield* fs.writeFileString(path.join(folder, "plugin.js"), CODE);
 
-        const linked = yield* store.link(path.join(folder, "..", "dist"));
-        expect(linked.source).toEqual({ kind: "local", path: folder });
-        expect(linked.error).toBeUndefined();
+        const [linked] = yield* store.link(path.join(folder, "..", "dist"));
+        expect(linked?.source).toEqual({ kind: "local", path: folder });
+        expect(linked?.error).toBeUndefined();
         const lock = yield* fs.readFileString(home.pluginsLock);
         yield* store.link(folder);
         expect(yield* fs.readFileString(home.pluginsLock)).toBe(lock);
@@ -372,6 +547,33 @@ describe("PluginStore", () => {
         expect(updated).toMatchObject({ version: "1.1.0", sha256: sha256(newer) });
         expect(yield* store.checkUpdates).toEqual({ updates: {}, failures: {} });
         expect(yield* failure(store.update("pinned"))).toContain("pinned to v1.0.0");
+      }),
+    ));
+
+  it("moves a plugin to its repo's registry on reinstall, keeping its data", () =>
+    withStore(({ store, fs, path, home }) =>
+      Effect.gen(function* () {
+        yield* fs.makeDirectory(home.pluginData, { recursive: true });
+        const dataFile = path.join(home.pluginData, "my-plugin.json");
+        yield* fs.writeFileString(dataFile, '{"count":1}');
+        publish("someone/my-plugin", { manifest: manifest(), code: CODE });
+        yield* store.install(github("someone/my-plugin"), "my-plugin");
+
+        assets.clear();
+        publish("someone/my-plugin", {
+          registry: { "my-plugin": "my-plugin/dist" },
+          plugins: { "my-plugin": { manifest: manifest({ version: "1.1.0" }), code: CODE } },
+        });
+        expect((yield* store.checkUpdates).failures["my-plugin"]).toContain(
+          "No manifest.json in the latest release of someone/my-plugin.",
+        );
+
+        const [offer] = (yield* store.preview("someone/my-plugin")).offers;
+        expect(offer).toMatchObject({ kind: "ready", source: { plugin: "my-plugin" } });
+        if (offer?.kind !== "ready") return;
+        expect((yield* store.install(offer.source, "my-plugin")).version).toBe("1.1.0");
+        expect(yield* fs.readFileString(dataFile)).toBe('{"count":1}');
+        expect(yield* store.checkUpdates).toEqual({ updates: {}, failures: {} });
       }),
     ));
 });

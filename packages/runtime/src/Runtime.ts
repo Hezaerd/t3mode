@@ -4,6 +4,7 @@ import type { OptionsSpec, PluginApi, PluginDefinition, PluginReport } from "@t3
 import type { Info, NativeBridge } from "@t3mode/shared/Ipc";
 import type {
   InstalledPlugin,
+  GithubSource,
   PluginDataSnapshot,
   PluginPreview,
   PluginRegistration,
@@ -233,10 +234,8 @@ export class Runtime {
     return this.#ask("Preview", () => this.#native.plugins.preview(input));
   }
 
-  async install(preview: PluginPreview): Promise<PluginResult<InstalledPlugin>> {
-    const result = await this.#ask("Install", () =>
-      this.#native.plugins.install(preview.source, preview.manifest.id),
-    );
+  async install(source: GithubSource, id: string): Promise<PluginResult<InstalledPlugin>> {
+    const result = await this.#ask("Install", () => this.#native.plugins.install(source, id));
     return this.#loadAndStart(result);
   }
 
