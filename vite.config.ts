@@ -24,7 +24,7 @@ export default defineConfig({
         files: [
           "packages/runtime/src/**/*.ts",
           "packages/preload/src/**/*.ts",
-          "packages/shared/src/{Ipc,Plugins,Settings,Shortcut,Updates,Version}.ts",
+          "packages/shared/src/{Ipc,Plugins,Settings,Shortcut,T3Hooks,Updates,Version}.ts",
         ],
         rules: {
           "eslint/no-restricted-imports": [

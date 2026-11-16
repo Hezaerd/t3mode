@@ -7,6 +7,7 @@
 // The pane is React's. t3mode adds its page as the pane's last child and hides React's
 // children with CSS while it is open, so React's nodes are never moved or removed.
 import { type InstalledPlugin, type PluginPreview, sourceLabel } from "@t3mode/shared/Plugins";
+import { T3_HOOKS, hookSelector } from "@t3mode/shared/T3Hooks";
 
 import { h } from "../dom.ts";
 import type { PluginState, Runtime } from "../Runtime.ts";
@@ -33,9 +34,9 @@ const OPEN_ATTRIBUTE = "data-t3mode-page-open";
 const SETTINGS_ROUTE = "#/settings/general";
 
 const sel = {
-  pane: '[data-workspace-area="settings"]',
-  nav: '[data-workspace-area="settings-nav"]',
-  section: "button[data-settings-section]",
+  pane: hookSelector(T3_HOOKS.pane),
+  nav: hookSelector(T3_HOOKS.nav),
+  section: `button${hookSelector(T3_HOOKS.section)}`,
   close: 'header button[aria-label="Close"]',
 } as const;
 
@@ -315,7 +316,7 @@ export class SettingsPage {
     item.setAttribute(NAV_ATTRIBUTE, key);
     const entry = item.querySelector<HTMLElement>("button");
     if (!entry) return item;
-    entry.removeAttribute("data-settings-section");
+    entry.removeAttribute(T3_HOOKS.section.attribute);
     entry.removeAttribute("aria-current");
     entry.setAttribute("data-active", "false");
     const label = [...entry.querySelectorAll<HTMLElement>("span, div")].findLast(
