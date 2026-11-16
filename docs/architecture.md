@@ -214,7 +214,7 @@ The runtime calls `load()` inside its fault isolation, so an error in a plugin's
 
 **API.** `PluginApi` is a public contract, versioned by `api`. Besides the disposables above, it gives plugins the helpers that know T3 Code. These are `queryFirst`, `currentThreadKey`, `react.findPropsUp` and `react.findHookState`. They stay in t3mode, so when a nightly breaks one, a single t3mode fix repairs every plugin that uses it. `toast(message, kind?)` and `ui` reuse t3mode's own toast and settings components for the same reason. A toast from a plugin that has stopped is dropped.
 
-**Writing a plugin.** `templates/plugin` is a starting point. It has the SDK, a build that writes `dist/manifest.json` and `dist/plugin.js`, and a GitHub Action that publishes release `v<version>` with both files when a push to `main` carries a `manifest.json` version that has no release yet. Link its `dist/` folder while developing.
+**Writing a plugin.** `templates/plugin` is a starting point. It has the SDK, a build that writes `dist/manifest.json` and `dist/plugin.js`, and a GitHub Action that publishes release `v<version>` with both files when a push to `main` carries a `manifest.json` version that has no release yet. Link its `dist/` folder while developing. `templates/monorepo` is the same for several plugins in one repository. Its workflow publishes release `r-<short sha>` with every plugin when any manifest version differs from the latest release, and `plugin link` on its root links them all.
 
 - **Rules.** Do the plugin's work in `start`, through the API, so turning it off undoes it. Drive T3 Code's own controls with `.click()` instead of rebuilding them. Never insert into or move React-owned nodes: overlay with `position: fixed`, or add next to React's children. Re-apply whenever the DOM changes, because React replaces nodes. Keep selectors in the plugin, newest markup first, and look them up with `api.queryFirst`.
 - **Reading React state.** `api.react` reads the fiber React attaches to DOM nodes (`__reactFiber$…`). Component names are minified, so lookups match on the shape of the data: `findPropsUp` walks ancestors for props that pass a test, and `findHookState` walks the tree for hook state that passes a type guard. Either returns undefined when the shape changed, and the plugin reports "waiting".
@@ -292,6 +292,7 @@ t3mode/
                  dist/repair.cjs for the update helper
   templates/
     plugin/      starting point for a standalone plugin, with its release workflow
+    monorepo/    starting point for several plugins in one repository, with its release workflow
   docs/
   .sandbox/      dev copy of T3 Code (git-ignored)
 ```
