@@ -22,7 +22,7 @@ const describeStatus = (status: UpdateStatus): string => {
   if (!status.managed) {
     return status.manageSetting
       ? "T3 Mode installs updates from the next launch. Until then T3 Code's own updater runs, and an update it installs removes T3 Mode."
-      : 'T3 Code\'s own updater installs updates, and each one removes T3 Mode. Run "pnpm t3mode repair" after an update.';
+      : 'T3 Code\'s own updater installs updates, and each one removes T3 Mode. Run "t3mode repair" after an update.';
   }
   if (!status.manageSetting) {
     return "Turned off. From the next launch, T3 Code's own updater installs updates, and each one removes T3 Mode.";

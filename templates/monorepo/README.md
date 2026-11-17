@@ -15,10 +15,10 @@ pnpm install
 pnpm build
 ```
 
-Run this command from the t3mode repository to link every plugin at once.
+Run this command once to link every plugin.
 
 ```sh
-pnpm t3mode plugin link <repo root>
+t3mode plugin link <repo root>
 ```
 
 Rebuild after each source change. Reload T3 Code with Ctrl+R.

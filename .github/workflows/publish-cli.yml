@@ -1,0 +1,83 @@
+# Publishes the t3mode CLI to npm when a push to main carries a version that isn't published yet,
+# then tags that commit t3mode-v<version>. The tag is what marks a version as published: npm can
+# hold a new version for review for a while, and `npm view` doesn't see it until it is released.
+# The package holds every bundle t3mode installs (shim, loader, preload, renderer, repair, update
+# helper), so any package can change what it ships.
+# npm trusts this workflow by its filename (npm trusted publishing), so no token is stored here.
+# Pull requests run everything up to a dry-run publish.
+name: Publish CLI
+
+on:
+  push:
+    branches: [main]
+    paths: ["packages/**", "pnpm-lock.yaml", ".github/workflows/publish-cli.yml"]
+  pull_request:
+    paths: ["packages/**", "pnpm-lock.yaml", ".github/workflows/publish-cli.yml"]
+  workflow_dispatch:
+
+permissions:
+  # To push the t3mode-v<version> tag.
+  contents: write
+  id-token: write
+
+concurrency:
+  group: publish-cli-${{ github.ref }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - name: Use npm 11.5.1 or later, which trusted publishing needs
+        run: npm install --global npm@^11.5.1
+      - name: Check whether this version is already published
+        id: version
+        run: |
+          version="$(node -p "require('./packages/cli/package.json').version")"
+          reported="$(sed -n 's/^export const T3MODE_VERSION = "\(.*\)";$/\1/p' packages/shared/src/Version.ts)"
+          if [ "$version" != "$reported" ]; then
+            echo "packages/cli/package.json is $version but T3MODE_VERSION is $reported. Bump both."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ -n "$(git ls-remote --tags origin "refs/tags/t3mode-v$version")" ]; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "t3mode-v$version is tagged, so it was published."
+          elif npm view "t3mode@$version" version > /dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "t3mode@$version is already on npm."
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+      - run: pnpm install --frozen-lockfile
+      # Every package, not only the CLI: the CLI copies the others' fresh output into dist/bundles.
+      - run: pnpm build
+      - name: Pack
+        run: pnpm --filter t3mode pack --pack-destination "$RUNNER_TEMP/cli"
+      - name: Check the package
+        run: |
+          tarball="$(ls "$RUNNER_TEMP"/cli/*.tgz)"
+          for file in t3mode.cjs repair.cjs bundles/main.cjs bundles/preload.cjs bundles/renderer.iife.js bundles/index.cjs bundles/update-helper.ps1; do
+            tar -tzf "$tarball" | grep -qx "package/dist/$file" || { echo "Missing dist/$file"; exit 1; }
+          done
+          mkdir "$RUNNER_TEMP/smoke" && cd "$RUNNER_TEMP/smoke"
+          npm init -y > /dev/null
+          npm install --force "$tarball"
+          npx t3mode --version
+      - name: Dry run
+        if: github.event_name == 'pull_request' || steps.version.outputs.published == 'true'
+        run: npm publish "$RUNNER_TEMP"/cli/*.tgz --access public --dry-run
+      - name: Publish ${{ steps.version.outputs.version }}
+        if: github.event_name != 'pull_request' && steps.version.outputs.published == 'false'
+        run: npm publish "$RUNNER_TEMP"/cli/*.tgz --access public
+      - name: Tag t3mode-v${{ steps.version.outputs.version }}
+        if: github.event_name != 'pull_request' && steps.version.outputs.published == 'false'
+        run: |
+          git tag "t3mode-v${{ steps.version.outputs.version }}" "$GITHUB_SHA"
+          git push origin "t3mode-v${{ steps.version.outputs.version }}"

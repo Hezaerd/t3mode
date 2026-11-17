@@ -411,7 +411,7 @@ export const make = Effect.fn("Updater.make")(function* (options: UpdaterOptions
           if (!helperFiles.every((file) => NodeFs.existsSync(file))) {
             runNow(
               Effect.logWarning(
-                "Update not installed: the update helper is missing. Run pnpm t3mode deploy.",
+                "Update not installed: the update helper is missing. Run t3mode install.",
               ),
             );
             return;
