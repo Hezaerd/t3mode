@@ -1,3 +1,4 @@
+import { accessLines, declaredAccess } from "@t3mode/shared/Plugins";
 // `t3mode <command>` (`pnpm t3mode` in this repo): install, repair, uninstall, deploy, status,
 // doctor, safe, sandbox, plugin.
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -331,6 +332,7 @@ const pluginAdd = Command.make(
               `${offer.manifest.name} ${offer.manifest.version}${offer.manifest.author ? ` by ${offer.manifest.author}` : ""}`,
               `from github.com/${sourceLabel(offer.source)}`,
               offer.manifest.description,
+              ...accessLines(declaredAccess(offer.manifest)),
             ].join("\n"),
       );
     }
@@ -379,6 +381,10 @@ const pluginAdd = Command.make(
 const pluginUpdate = Command.make(
   "update",
   {
+    yes: Flag.Boolean("yes").pipe(
+      Flag.withDescription("Approve new access without asking"),
+      Flag.withDefault(false),
+    ),
     id: Argument.String("id").pipe(
       Argument.withDescription("The plugin to update (default: every plugin with an update)"),
       Argument.optional,
@@ -400,7 +406,18 @@ const pluginUpdate = Command.make(
       return;
     }
     for (const id of ids) {
-      const updated = yield* store.update(id);
+      const updated = yield* store.update(id, options.yes).pipe(
+        Effect.catch((error) =>
+          Effect.gen(function* () {
+            if (!error.approval) return yield* error;
+            yield* Console.log(accessLines(error.approval).join("\n"));
+            if (!(yield* Prompt.Confirm({ message: `Approve new access for ${id}?` })))
+              return undefined;
+            return yield* store.update(id, true);
+          }),
+        ),
+      );
+      if (!updated) continue;
       yield* Console.log(`Installed the latest release of ${updated.name}: ${updated.version}.`);
     }
     yield* Console.log(RELOAD);

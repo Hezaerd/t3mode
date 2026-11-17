@@ -85,7 +85,7 @@ const start = (): void => {
       list: () => plugins({ _tag: "list" }),
       preview: (input: string) => plugins({ _tag: "preview", input }),
       install: (source: GithubSource, id: string) => plugins({ _tag: "install", source, id }),
-      update: (id: string) => plugins({ _tag: "update", id }),
+      update: (id: string, approved = false) => plugins({ _tag: "update", id, approved }),
       remove: (id: string) => plugins({ _tag: "remove", id }),
       checkUpdates: () => plugins({ _tag: "check" }),
     },

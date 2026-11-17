@@ -1,3 +1,4 @@
+import { accessLines, declaredAccess } from "@t3mode/shared/Plugins";
 // T3 Mode's pages inside T3 Code's settings. A "T3 Mode" group in the settings navigation holds
 // two entries, like Vencord's: "T3 Mode" (version, updates, shortcut, troubleshooting) and
 // "Plugins" (install from GitHub, a card grid with search and filter, and a page per plugin for
@@ -698,12 +699,9 @@ export class SettingsPage {
           className: native.rowDescription,
           text: `${by}github.com/${sourceLabel(source)}`,
         }),
-        manifest.sockets
-          ? h("p", {
-              className: native.rowDescription,
-              text: `Can connect to local sockets: ${manifest.sockets.join(", ")}`,
-            })
-          : null,
+        ...accessLines(declaredAccess(manifest)).map((text) =>
+          h("p", { className: native.rowDescription, text }),
+        ),
         manifest.description
           ? h("p", { className: native.rowDescription, text: manifest.description })
           : null,
@@ -790,6 +788,37 @@ export class SettingsPage {
 
   async #update(plugin: InstalledPlugin): Promise<void> {
     const result = await this.#runtime.updatePlugin(plugin.id);
+    if (!result.ok && result.approval) {
+      const panel = h(
+        "div",
+        { className: `${native.card} t3mode-confirm` },
+        h("h3", { className: native.rowTitle, text: `Approve update for ${plugin.name}` }),
+        ...accessLines(result.approval).map((text) =>
+          h("p", { className: native.rowDescription, text }),
+        ),
+        button({
+          text: "Approve and update",
+          onClick: () =>
+            void busy(approve, async () => {
+              const updated = await this.#runtime.updatePlugin(plugin.id, true);
+              toast(
+                updated.ok
+                  ? `${updated.value.name} is updated to ${updated.value.version}.`
+                  : updated.error,
+                updated.ok ? "info" : "error",
+              );
+              panel.remove();
+            }),
+        }),
+        button({ text: "Cancel", onClick: () => panel.remove() }),
+      );
+      const approve = panel.querySelector("button")!;
+      this.#body?.querySelector("[data-t3mode-approval]")?.remove();
+      panel.setAttribute("data-t3mode-approval", plugin.id);
+      this.#body?.prepend(panel);
+      panel.scrollIntoView({ block: "nearest" });
+      return;
+    }
     toast(
       result.ok ? `${result.value.name} is updated to ${result.value.version}.` : result.error,
       result.ok ? "info" : "error",

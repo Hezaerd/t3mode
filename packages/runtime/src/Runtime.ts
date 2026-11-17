@@ -239,8 +239,8 @@ export class Runtime {
     return this.#loadAndStart(result);
   }
 
-  async updatePlugin(id: string): Promise<PluginResult<InstalledPlugin>> {
-    const result = await this.#ask("Update", () => this.#native.plugins.update(id));
+  async updatePlugin(id: string, approved = false): Promise<PluginResult<InstalledPlugin>> {
+    const result = await this.#ask("Update", () => this.#native.plugins.update(id, approved));
     return this.#loadAndStart(result);
   }
 

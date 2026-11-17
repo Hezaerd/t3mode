@@ -24,7 +24,10 @@ export const PluginActionSchema = Schema.Union([
     source: PluginStore.GithubSourceSchema,
     id: PluginStore.PluginIdSchema,
   }),
-  Schema.TaggedStruct("update", { id: PluginStore.PluginIdSchema }),
+  Schema.TaggedStruct("update", {
+    id: PluginStore.PluginIdSchema,
+    approved: Schema.optionalKey(Schema.Boolean),
+  }),
   Schema.TaggedStruct("remove", { id: PluginStore.PluginIdSchema }),
   Schema.TaggedStruct("check", {}),
 ]);
@@ -44,7 +47,12 @@ const result = <A>(
 ): Effect.Effect<PluginResult<A>> =>
   effect.pipe(
     Effect.match({
-      onFailure: (error) => ({ ok: false, error: error.message }) as const,
+      onFailure: (error) =>
+        ({
+          ok: false,
+          error: error.message,
+          ...(error.approval === undefined ? {} : { approval: error.approval }),
+        }) as const,
       onSuccess: (value) => ({ ok: true, value }) as const,
     }),
   );
@@ -85,7 +93,7 @@ export const make = Effect.gen(function* () {
       case "install":
         return yield* result(store.install(action.source, action.id).pipe(Effect.map(withUpdate)));
       case "update":
-        return yield* result(store.update(action.id).pipe(Effect.map(withUpdate)));
+        return yield* result(store.update(action.id, action.approved).pipe(Effect.map(withUpdate)));
       case "remove":
         return yield* result(store.remove(action.id));
       case "check":
