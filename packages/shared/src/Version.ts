@@ -1,1 +1,1 @@
-export const T3MODE_VERSION = "0.1.0";
+export const T3MODE_VERSION = "0.2.0";
