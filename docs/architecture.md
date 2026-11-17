@@ -32,6 +32,7 @@ Checked on this machine against `0.1.10-nightly.20261114.4669`:
 | Update channel                               | `updateChannel` in `<T3 home>/userdata/desktop-settings.json` (Settings → About → Update track), else from the version | t3mode follows the channel the user picked in T3 Code                                              |
 | Installer                                    | NSIS, per user, signed "CN=T3 Tools Inc"; electron-updater runs it as `--updated /S --force-run`                       | t3mode runs it as `--updated /S`, then re-applies the shim before starting T3 Code                 |
 | Detached console processes                   | Node's `detached: true` starts a process without a console, and `powershell.exe` exits at once without one             | The update helper is started through `Start-Process` (see Updates)                                 |
+| Loaded `.node` files                         | Windows locks a loaded native module until its process exits: no rename over it, no delete of its folder               | Update, remove and disable stop a plugin's processes first (see Plugins)                           |
 | Stable DOM hooks                             | `data-*` attributes listed in T3 Code's theme guide (`[data-thread-details-card]`, `[data-chat-composer-form]`, …)     | Prefer these over class names, which change between releases                                       |
 
 Run `pnpm t3mode doctor` (see CLI) to check the fuses, original entry, update feed, bundle tokens and runtime DOM hooks. The canary runs these checks on new nightlies.
@@ -180,7 +181,7 @@ One GitHub release contains `t3mode.json`, `<id>.manifest.json`, and `<id>.plugi
 
 **Program files.** API 1 manifests can name a `backend` script, an `mcp` script, and a `files` array of extra assets. Script names end in `.js` or `.cjs`. File names contain 1 to 100 letters, digits, dots, underscores, or hyphens, start with a letter or digit, and don't end in a dot. No two extra names may differ only by case, because Windows stores them as one file. Reserved names are `manifest.json`, `plugin.js`, and `t3mode.json`. The deduplicated extra set holds at most 20 files. Release assets use plain names for standalone plugins and `<id>.<name>` for registry plugins.
 
-`plugin.js` has a 5 MiB cap. Each backend or MCP script has a 20 MiB cap. Each extra asset has a 64 MiB cap. All extras together have a 128 MiB cap. Downloads enforce the caps while streaming. These files do not run yet.
+`plugin.js` has a 5 MiB cap. Each backend or MCP script has a 20 MiB cap. Each extra asset has a 64 MiB cap. All extras together have a 128 MiB cap. Downloads enforce the caps while streaming. The `mcp` script runs as a tool server (below). The `backend` script doesn't run yet.
 
 **The lockfile.** `<home>/plugins.json` lists what's installed, as `{ "version": 1, "plugins": { "<id>": { "source", "version", "sha256"?, "files"?, "backend"?, "mcp"?, "approved"? } } }`. A source is one of two kinds.
 
@@ -201,6 +202,36 @@ An id that's already installed from another source is refused. A repo is the sam
 The optional GitHub source field `plugin` selects a registry id. Downloads prefix manifest and code asset names with `<id>.`. Installed files keep plain names. The Plugins page keeps multiple offers open after an install and marks that offer installed.
 
 **Updates.** "Check for updates" on the Plugins page, and `plugin update` in the CLI, fetch each unpinned GitHub plugin's latest `manifest.json` (`<id>.manifest.json` for a registry plugin) and compare versions. A newer one shows "Update to x.y" on its card. Nothing updates on its own, because a new release is new code. An update that adds backend access, MCP access, or socket patterns outside the approved patterns asks for approval before downloading code. The page lists the declared access and retries after approval. `plugin update --yes` approves without asking.
+
+**Tool servers.** A plugin's `mcp` script is an MCP server over stdio, and it gives the plugin's tools to the agents T3 Code runs. For each enabled GitHub plugin with an `mcp` script whose pinned files all match, t3mode writes an entry named `t3mode-<id>` in two configs:
+
+- Claude's user config: `~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json`, under `mcpServers`;
+- Codex's: `~/.codex/config.toml`, or `$CODEX_HOME/config.toml`, as a `[mcp_servers.t3mode-<id>]` table.
+
+The entry runs T3 Code's own exe on the script, with `ELECTRON_RUN_AS_NODE=1`. Users may have native Claude and Codex binaries and no Node install, so Node from PATH isn't an option.
+
+- **Ownership.** Each entry also sets `T3MODE_HOME` to the home's root. That variable marks the entry as this home's. t3mode rewrites and removes only its own entries, so the sandbox and the real install share these files without touching each other's entries or the user's.
+- **Taken names.** A name already used by an entry t3mode didn't write is left alone, and the plugin's tools aren't added there. The conflict is logged.
+- **Codex.** `config.toml` is edited as text, and never through `codex mcp`, which rewrites the whole file. Only whole tables named `mcp_servers.t3mode-<id>` that carry this home's marker change, with their subtables. Line endings and the final newline are kept, so adding then removing an entry gives the file back byte for byte.
+- **Claude.** `.claude.json` is written only when its content changes, through a temp file and a rename. A file that doesn't parse is left alone.
+- **Missing providers.** A provider that isn't set up is skipped: no `.claude.json`, or no Codex folder.
+- **When.** Main reconciles the entries at launch, after app ready, and after every settings write. It also reconciles after every install, update and remove from the page. A run with nothing to change writes nothing and starts no process. Safe mode leaves the entries as they are. The CLI reconciles after `plugin add`, `update` and `remove`, and `uninstall` removes this home's entries.
+- **Picking up changes.** Claude starts a server for each chat. Codex keeps one per `codex.exe`. A new entry is therefore used from the next Claude chat or the next Codex process.
+- **Linked plugins.** Their tool servers aren't registered, because their scripts live outside `<home>/plugins/` where the update helper looks. Register one by hand while developing.
+- **Other providers.** Only Claude and Codex are covered. T3 Code's other providers are untested.
+- **Module type.** `<home>/plugins/package.json` holds `{ "type": "commonjs" }`. Node takes a `.js` file's module type from the nearest `package.json` above it. A user's `~/package.json` with `"type": "module"` would otherwise make every plugin script ESM, and `require` would fail.
+
+**Stopping a plugin's processes.** Windows keeps a loaded `.node` file locked until its process exits. While it is loaded, the file can't be renamed over or deleted, and neither can its folder. This was reproduced in the sandbox:
+
+- an update with a live tool server failed halfway, with one file replaced and a hash mismatch;
+- a remove deleted the lockfile entry, then failed on the folder.
+
+So one operation stops every process running T3 Code's exe whose command line names a file under `<home>/plugins/<id>/`, and waits for those processes to exit. It also matches on the exe, which spares Explorer or an editor opened on the folder.
+
+- An update runs it after its downloads and before its first write.
+- A remove runs it before deleting the folder. The folder is deleted before the lockfile entry, so a remove that fails can run again.
+- Disabling a plugin runs it once the plugin's entries are gone.
+- The update helper has its own copy (see Updates).
 
 **Loading.** The preload asks main for the page scripts. These are each installed plugin's `plugin.js`, wrapped by main, then `renderer.js`. The preload runs each one with its own `webFrame.executeJavaScript` call and `//# sourceURL=t3mode-plugin/<id>.js`, so a plugin that doesn't parse can't stop the others or the runtime. The wrapper registers the plugin's module under its manifest id without running it.
 
@@ -243,7 +274,7 @@ The runtime calls `load()` inside its fault isolation, so an error in a plugin's
 | `status`    | Also shows a downloaded update waiting to install, and the update helper's last log lines                                                                                |
 | `doctor`    | Check the fuses, original entry, update feed, bundle tokens and runtime DOM hooks                                                                                        |
 
-`install`, `repair` and `uninstall` refuse to run while T3 Code is open (`--wait` waits for it to close). The new shim is built before anything is moved, and a failed swap puts the original back.
+`install`, `repair` and `uninstall` refuse to run while T3 Code is open (`--wait` waits for it to close). They first stop plugin tool servers running T3 Code's exe, which would otherwise count as T3 Code. `uninstall` also removes this home's tool server entries from Claude's and Codex's config. The new shim is built before anything is moved, and a failed swap puts the original back.
 
 **Foreign shims.** If `app.asar` carries a t3mod or Vencord-style marker that isn't ours, `install` refuses and explains, instead of stacking shims.
 
@@ -272,7 +303,7 @@ In both, the helper is a PowerShell script. It can't be T3 Code's exe in Node mo
 - **Check** (`Updater.ts`, `UpdateFeed.ts`). 20 s after start, then every hour, and on "Check now": read `app-update.yml`, list the repo's releases through GitHub's API, take the newest release on the channel that has `<channel>.yml`, read it, and compare versions (semver with prerelease fields, so nightlies order by date and build). Requests go through Electron's `net.fetch`, so system proxies apply as they do for T3 Code.
 - **Download and verify.** The installer for the CPU (`…-x64.exe` or `…-arm64.exe`) goes to `<home>/updates/<version>/`, with progress shown live on the T3 Mode page. It must match the size and SHA-512 from `<channel>.yml`, and `Get-AuthenticodeSignature` must report a valid signature whose common name is a publisher from `app-update.yml` ("T3 Tools Inc"). Anything else is deleted and reported. `updates/ready.json` records the verified installer, so a download survives a restart; the next launch after the install sees the new version and deletes it.
 - **Install on quit.** In Electron's `will-quit`, if an update is ready, the loader starts `update-helper.ps1` (deployed to `<home>/dist`), which:
-  1. waits for every process running from the install folder to exit (up to 2 minutes, else it gives up until the next quit);
+  1. waits for every process running from the install folder to exit (up to 2 minutes, else it gives up until the next quit). Plugin tool servers run T3 Code's exe, and Claude or Codex sessions outside T3 Code can keep them alive. Each time the helper checks, it stops every process of an exe in the install folder whose command line names a file under `<home>/plugins/`. Any other process still holds the update;
   2. runs the installer with `--updated /S` and waits for it;
   3. re-applies the shim by running `repair.cjs` with T3 Code's new exe in Node mode (`ELECTRON_RUN_AS_NODE=1`, with `process.noAsar` so .asar files are moved as files). `repair.cjs` is the CLI's own `applyShim`, bundled, so the CLI and the helper share one tested swap;
   4. after "Restart now", starts T3 Code again with the arguments it had.
