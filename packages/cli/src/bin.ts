@@ -1,4 +1,3 @@
-import { accessLines, declaredAccess } from "@t3mode/shared/Plugins";
 // `t3mode <command>` (`pnpm t3mode` in this repo): install, repair, uninstall, deploy, status,
 // doctor, safe, sandbox, plugin.
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -21,7 +20,12 @@ import {
   SANDBOX_INSTALLER_ENV,
   githubUrl,
 } from "@t3mode/shared/Layout";
-import { type InstalledPlugin, sourceLabel } from "@t3mode/shared/Plugins";
+import {
+  accessLines,
+  declaredAccess,
+  type InstalledPlugin,
+  sourceLabel,
+} from "@t3mode/shared/Plugins";
 import * as PluginStore from "@t3mode/shared/PluginStore";
 import { T3MODE_VERSION } from "@t3mode/shared/Version";
 
@@ -372,7 +376,11 @@ const pluginAdd = Command.make(
           });
     if (selected.length === 0) yield* Console.log("Nothing was installed.");
     for (const offer of selected) {
-      const installed = yield* store.install(offer.source, offer.manifest.id);
+      const installed = yield* store.install(
+        offer.source,
+        offer.manifest.id,
+        declaredAccess(offer.manifest),
+      );
       yield* Console.log(`Installed ${installed.name} ${installed.version}. ${RELOAD}`);
     }
   }),

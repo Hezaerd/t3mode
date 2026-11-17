@@ -652,6 +652,27 @@ describe("program packaging", () => {
       }),
     ));
 
+  it("refuses an install whose release asks for more access than the prompt showed", () =>
+    withStore(({ store, fs, home }) =>
+      Effect.gen(function* () {
+        publish("someone/program", { manifest: manifest({ backend: "backend.cjs" }), code: CODE });
+        assets.set("/someone/program/releases/latest/download/backend.cjs", "backend");
+        const refused = yield* store
+          .install(github("someone/program"), "my-plugin", {
+            backend: false,
+            mcp: false,
+            sockets: [],
+          })
+          .pipe(Effect.flip);
+        expect(refused.approval).toEqual({ backend: true, mcp: false, sockets: [] });
+        expect(yield* fs.exists(home.pluginsLock)).toBe(false);
+        yield* store.install(github("someone/program"), "my-plugin", refused.approval);
+        expect(
+          JSON.parse(yield* fs.readFileString(home.pluginsLock)).plugins["my-plugin"].backend,
+        ).toBe("backend.cjs");
+      }),
+    ));
+
   it("removes all pinned program files", () =>
     withStore(({ store, fs, path, home }) =>
       Effect.gen(function* () {

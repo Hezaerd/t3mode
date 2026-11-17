@@ -29,6 +29,7 @@ describe("PluginActionSchema", () => {
         _tag: "install",
         source: { kind: "github", owner: "owner", repo: "repo", tag: "v1.0.0" },
         id: "my-plugin",
+        approved: { backend: false, mcp: false, sockets: [] },
       },
       { _tag: "update", id: "my-plugin" },
       { _tag: "remove", id: "my-plugin" },
@@ -42,6 +43,7 @@ describe("PluginActionSchema", () => {
       _tag: "install",
       source: { kind: "github", owner: "owner", repo: "repo", plugin: "alpha" },
       id: "alpha",
+      approved: { backend: false, mcp: false, sockets: [] },
     };
     expect(decode(action)).toEqual(action);
     expect(() =>
@@ -51,7 +53,12 @@ describe("PluginActionSchema", () => {
 
   it("refuses a local source, so page code can't make main read a folder", () => {
     expect(() =>
-      decode({ _tag: "install", source: { kind: "local", path: "C:/Users" }, id: "my-plugin" }),
+      decode({
+        _tag: "install",
+        source: { kind: "local", path: "C:/Users" },
+        id: "my-plugin",
+        approved: { backend: false, mcp: false, sockets: [] },
+      }),
     ).toThrow();
   });
 

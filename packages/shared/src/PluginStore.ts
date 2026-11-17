@@ -184,6 +184,7 @@ export class PluginStore extends Context.Service<
     readonly install: (
       source: GithubSource,
       expectedId: string,
+      approved?: boolean | Access,
     ) => Effect.Effect<InstalledPlugin, PluginError>;
     readonly update: (
       id: string,
@@ -501,18 +502,15 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
     yield* checkConflict(current, manifest.id, source);
     const previous = lockEntry(current, manifest.id);
     const access = declaredAccess(manifest);
-    if (
-      previous &&
-      approved !== true &&
-      accessGrew(
-        typeof approved === "object"
-          ? approved
-          : (previous.approved ?? { backend: false, mcp: false, sockets: [] }),
-        access,
-      )
-    ) {
+    const baseline =
+      typeof approved === "object"
+        ? approved
+        : (previous?.approved ?? { backend: false, mcp: false, sockets: [] });
+    if (approved !== true && accessGrew(baseline, access)) {
       return yield* new PluginError({
-        message: "This update needs approval for its declared access.",
+        message: previous
+          ? "This update asks for new access."
+          : "This release asks for access you weren't shown. Look at it again before installing.",
         approval: access,
       });
     }
@@ -618,7 +616,8 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
   });
 
   const install = Effect.fn("PluginStore.install")(
-    (source: GithubSource, expectedId: string) => installNow(source, expectedId, true),
+    (source: GithubSource, expectedId: string, approved: boolean | Access = true) =>
+      installNow(source, expectedId, approved),
     withLock,
   );
 

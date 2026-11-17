@@ -23,6 +23,7 @@ export const PluginActionSchema = Schema.Union([
   Schema.TaggedStruct("install", {
     source: PluginStore.GithubSourceSchema,
     id: PluginStore.PluginIdSchema,
+    approved: PluginStore.AccessSchema,
   }),
   Schema.TaggedStruct("update", {
     id: PluginStore.PluginIdSchema,
@@ -91,7 +92,9 @@ export const make = Effect.gen(function* () {
       case "preview":
         return yield* result(store.preview(action.input));
       case "install":
-        return yield* result(store.install(action.source, action.id).pipe(Effect.map(withUpdate)));
+        return yield* result(
+          store.install(action.source, action.id, action.approved).pipe(Effect.map(withUpdate)),
+        );
       case "update":
         return yield* result(store.update(action.id, action.approved).pipe(Effect.map(withUpdate)));
       case "remove":

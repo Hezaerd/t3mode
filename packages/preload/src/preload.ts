@@ -84,7 +84,8 @@ const start = (): void => {
     plugins: {
       list: () => plugins({ _tag: "list" }),
       preview: (input: string) => plugins({ _tag: "preview", input }),
-      install: (source: GithubSource, id: string) => plugins({ _tag: "install", source, id }),
+      install: (source: GithubSource, id: string, approved: Access) =>
+        plugins({ _tag: "install", source, id, approved }),
       update: (id: string, approved?: Access) =>
         plugins({ _tag: "update", id, ...(approved === undefined ? {} : { approved }) }),
       remove: (id: string) => plugins({ _tag: "remove", id }),

@@ -235,8 +235,14 @@ export class Runtime {
     return this.#ask("Preview", () => this.#native.plugins.preview(input));
   }
 
-  async install(source: GithubSource, id: string): Promise<PluginResult<InstalledPlugin>> {
-    const result = await this.#ask("Install", () => this.#native.plugins.install(source, id));
+  async install(
+    source: GithubSource,
+    id: string,
+    approved: Access,
+  ): Promise<PluginResult<InstalledPlugin>> {
+    const result = await this.#ask("Install", () =>
+      this.#native.plugins.install(source, id, approved),
+    );
     return this.#loadAndStart(result);
   }
 
