@@ -11,7 +11,15 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { app, BrowserWindow, ipcMain, screen, session, type IpcMainEvent } from "electron";
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  screen,
+  session,
+  type IpcMainEvent,
+  type WebContents,
+} from "electron";
 
 import { type IndicatorReply, type ToIndicator, clipIndicatorText } from "@t3mode/shared/Backends";
 import { Channel, isMainWindowUrl } from "@t3mode/shared/Ipc";
@@ -44,6 +52,10 @@ const FromIndicatorSchema = Schema.Union([
   Schema.Struct({ op: Schema.Literal("painted"), epoch: Schema.String, n: Schema.Int }),
   Schema.Struct({ op: Schema.Literal("stop"), epoch: Schema.String }),
 ]);
+
+/** An indicator window's page. No plugin or T3 Code code runs there. */
+export const isIndicator = (contents: WebContents): boolean =>
+  contents.session === session.fromPartition(PARTITION);
 
 const decodeRequest = Schema.decodeUnknownOption(RequestSchema);
 const decodeFromIndicator = Schema.decodeUnknownOption(FromIndicatorSchema);

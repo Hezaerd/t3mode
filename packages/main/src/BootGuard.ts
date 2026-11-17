@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema";
 
 import { app } from "electron";
 
+import { isIndicator } from "./DesktopIndicator.ts";
 import { Files } from "./Files.ts";
 import { Home } from "./Home.ts";
 
@@ -112,8 +113,9 @@ export const layer = Layer.effect(
 
     const watchCrashes = Effect.sync(() => {
       let crashes: ReadonlyArray<number> = [];
-      app.on("render-process-gone", (_event, _contents, details) => {
-        if (details.reason === "clean-exit") return;
+      app.on("render-process-gone", (_event, contents, details) => {
+        // The desktop indicator's page runs no plugin code, so its crash says nothing about them.
+        if (details.reason === "clean-exit" || isIndicator(contents)) return;
         // @effect-diagnostics-next-line globalDate:off - Called from an Electron event, outside any fiber.
         const result = recordCrash(crashes, Date.now());
         crashes = result.times;
