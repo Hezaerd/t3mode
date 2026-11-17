@@ -8,7 +8,7 @@ t3mode adds plugins to the T3 Code desktop app on Windows, the way Vencord does 
 
 The repo ships the loader, the runtime, the settings pages and the plugin SDK. Plugins are projects of their own. Anyone can publish one as a GitHub release, and anyone can install it from its link (see Plugins below). That is the opposite of Vencord, which builds every plugin into one bundle.
 
-Non-goals for v1: macOS support, sandboxing plugins, a plugin registry, computer control, dictation, storing secrets.
+Non-goals for v1: macOS support, sandboxing plugins, a central plugin catalog, computer control, dictation, storing secrets.
 
 ## Facts about the target
 
@@ -129,7 +129,7 @@ Runs in the page, as one classic script with no imports. Plain TypeScript, no Ef
 
 ### 5. Plugins (`packages/plugin-sdk`, `packages/shared/src/Plugin*.ts`)
 
-**Decided: standalone plugins, installed from GitHub.** Each plugin is its own project. Its author publishes it as a GitHub release, and anyone installs it by pasting the link on the Plugins page. The repo ships no plugins. This replaces the M2 decision, where plugins were compiled into `renderer.js` from a git-ignored `userplugins/` folder.
+**Decided: plugins installed from GitHub.** Authors can publish one plugin or several plugins from one repository. Users paste the repository link on the Plugins page and choose what to install. The repo ships no plugins. This replaces the M2 decision, where plugins were compiled into `renderer.js` from a git-ignored `userplugins/` folder.
 
 **Trust.** A plugin runs in T3 Code's main world, with the same reach as T3 Code's own page code. That includes the DOM, `window.desktopBridge` and `window.t3modeNative`. It can't be sandboxed without losing the DOM, which is the reason plugins exist. So installing a plugin means trusting its author, as with a VS Code extension or an Obsidian plugin. t3mode does four things about it.
 
@@ -138,7 +138,7 @@ Runs in the page, as one classic script with no imports. Plain TypeScript, no Ef
 - It never updates a plugin without a click.
 - Safe mode starts T3 Code without any plugin.
 
-**A plugin folder** holds two files. A GitHub release, an installed copy and a linked dev build all have the same two.
+**A plugin folder** holds two files. An installed copy and a linked dev build use these names. A single-plugin release uses them too.
 
 - `manifest.json` is `{ "id", "name", "version", "description", "author"?, "sockets"?, "api": 1 }`. `id` must match `^[a-z0-9][a-z0-9-]{0,63}$`, because it becomes a folder name, a settings key and a string in generated code. `version` is a semantic version, compared to find updates. `api` is the plugin API's major version, and t3mode refuses a plugin built for another one. The manifest is read without running any code, so the install prompt and the Plugins page can show it.
 - `plugin.js` is a CommonJS bundle, at most 5 MiB, whose default export is `definePlugin({ options, start })`. Everything it imports is bundled in. The types and `definePlugin` come from `@t3mode/plugin-sdk`.
@@ -165,21 +165,35 @@ export default definePlugin({
 
 All plugins share the page, so main cannot verify which plugin is calling. The allowlist limits the page to sockets that some installed plugin declared and that the user saw at install. Updates can add socket names without a new prompt. This remains a known gap. Main contains only generic socket transport. Protocol logic belongs in plugins.
 
+**Monorepos.** A root `t3mode.json` maps plugin ids to built folders.
+
+```json
+{ "plugins": { "alpha": "packages/alpha/dist", "beta": "packages/beta/dist" } }
+```
+
+Keys follow the manifest id rules. Routes are relative POSIX paths. Absolute paths, backslashes, empty segments, and `.` or `..` segments are invalid. A registry contains 1 to 50 plugins. Downloaded registries have the same 64 KiB limit as manifests.
+
+One GitHub release contains `t3mode.json`, `<id>.manifest.json`, and `<id>.plugin.js` for every plugin. Every release carries every plugin, changed or not, because installs and update checks download from the latest release. The registry is uploaded verbatim. Release downloads use only its keys. Main never uses its routes to fetch files.
+
+`plugin link <folder>` reads the root registry and resolves every route from that folder. Each built manifest must match its registry key. The store validates every plugin before writing the lockfile once. Without a registry, the command links the folder as one plugin.
+
 **The lockfile.** `<home>/plugins.json` lists what's installed, as `{ "version": 1, "plugins": { "<id>": { "source", "version", "sha256"? } } }`. A source is one of two kinds.
 
-- `{ "kind": "github", "owner", "repo", "tag"? }`. Its files come from the release. The URL is `https://github.com/<owner>/<repo>/releases/latest/download/<file>`, or `/releases/download/<tag>/<file>` when the install was pinned to a tag. They're copied to `<home>/plugins/<id>/`. These URLs aren't GitHub's REST API, so its limit of 60 requests an hour for unauthenticated clients doesn't apply. `sha256` is the hash of the installed `plugin.js`, and a copy that no longer matches it isn't loaded.
+- `{ "kind": "github", "owner", "repo", "tag"?, "plugin"? }`. Its files come from the release. The URL is `https://github.com/<owner>/<repo>/releases/latest/download/<file>`, or `/releases/download/<tag>/<file>` when the install was pinned to a tag. They're copied to `<home>/plugins/<id>/`. These URLs aren't GitHub's REST API, so its limit of 60 requests an hour for unauthenticated clients doesn't apply. `sha256` is the hash of the installed `plugin.js`, and a copy that no longer matches it isn't loaded.
 - `{ "kind": "local", "path" }`, added by `pnpm t3mode plugin link <folder>`, for developing a plugin. The two files are read from that folder on every page load, so a rebuild and Ctrl+R pick up changes. Only the CLI adds local sources. Main never takes a file path from page code. Its decode of the page's requests accepts GitHub sources only.
 
 A `plugins.json` that doesn't decode, including one with a key that isn't a valid id, reads as empty and is logged. Every install, link and remove is refused until it is fixed or deleted, so a bad edit is never written over.
 
 **Install.** `PluginStore` (in shared, used by main and the CLI) does it in two steps.
 
-1. **Preview.** Parse the link. It can be `owner/repo`, `github.com/owner/repo`, the repo URL or a release tag URL, with an optional `@tag`. Fetch and decode `manifest.json`, check `api` and `id`, and return it for the prompt.
+1. **Preview.** Parse the link. It can be `owner/repo`, `github.com/owner/repo`, the repo URL or a release tag URL, with an optional `@tag`. Probe `manifest.json` first. If it exists, decode it and check its API and conflicts. If it is missing, fetch `t3mode.json` and check each named manifest with concurrency four. The preview returns the repository source and a list of offers. Each offer is ready with its source and manifest, or unavailable with its id and reason. A bad registry fails the preview. A bad plugin leaves the other offers available.
 2. **Install**, on confirmation. Fetch the manifest again and refuse if its id differs from the one the user saw. Fetch `plugin.js` with a size cap and hash it. Write each file next to its final name and rename it over, then write the lockfile entry. Because the lockfile entry is written last, a crash midway leaves the old install or a hash mismatch, never a plugin that loads half-updated code.
 
 An id that's already installed from another source is refused. A repo is the same source whatever its tag, so installing `owner/repo@v2` over `owner/repo` pins it, and GitHub names are compared without case. Running the same install twice ends in the same state. In main, requests go through Electron's `net.fetch`, like the updater's. `T3MODE_GITHUB_URL` replaces `https://github.com`, for tests and the sandbox.
 
-**Updates.** "Check for updates" on the Plugins page, and `plugin update` in the CLI, fetch each unpinned GitHub plugin's latest `manifest.json` and compare versions. A newer one shows "Update to x.y" on its card. Nothing updates on its own, because a new release is new code.
+The optional GitHub source field `plugin` selects a registry id. Downloads prefix manifest and code asset names with `<id>.`. Installed files keep plain names. The Plugins page keeps multiple offers open after an install and marks that offer installed.
+
+**Updates.** "Check for updates" on the Plugins page, and `plugin update` in the CLI, fetch each unpinned GitHub plugin's latest `manifest.json` (`<id>.manifest.json` for a registry plugin) and compare versions. A newer one shows "Update to x.y" on its card. Nothing updates on its own, because a new release is new code.
 
 **Loading.** The preload asks main for the page scripts. These are each installed plugin's `plugin.js`, wrapped by main, then `renderer.js`. The preload runs each one with its own `webFrame.executeJavaScript` call and `//# sourceURL=t3mode-plugin/<id>.js`, so a plugin that doesn't parse can't stop the others or the runtime. The wrapper registers the plugin's module under its manifest id without running it.
 
@@ -209,18 +223,18 @@ The runtime calls `load()` inside its fault isolation, so an error in a plugin's
 
 `pnpm t3mode <command>`, run from the repo in v1:
 
-| Command     | Does                                                                                                                          |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `install`   | Wait for T3 Code to close, rename `app.asar` to `_app.asar`, copy `app.asar.unpacked`, write the shim, copy `dist/`, relaunch |
-| `uninstall` | Restore the original, keep `~/.t3/t3mode` unless `--purge`                                                                    |
-| `repair`    | Re-apply the shim after an update overwrote it                                                                                |
-| `status`    | Installed? Shim version, T3 Code version, mod enabled, last errors                                                            |
-| `deploy`    | Copy freshly built bundles into the home (renderer changes then need only Ctrl+R)                                             |
-| `sandbox`   | Copy T3 Code to `.sandbox/`, install there with its own data folders, start it with DevTools on port 9333                     |
-| `safe`      | Next launch without the mod                                                                                                   |
-| `plugin`    | `list`, `add <link>` (asks first, `--yes` skips), `update [id]`, `remove <id>`, `link <folder>` for a plugin in development   |
-| `status`    | Also shows a downloaded update waiting to install, and the update helper's last log lines                                     |
-| `doctor`    | Check the fuses, original entry, update feed, bundle tokens and runtime DOM hooks                                             |
+| Command     | Does                                                                                                                                                                     |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `install`   | Wait for T3 Code to close, rename `app.asar` to `_app.asar`, copy `app.asar.unpacked`, write the shim, copy `dist/`, relaunch                                            |
+| `uninstall` | Restore the original, keep `~/.t3/t3mode` unless `--purge`                                                                                                               |
+| `repair`    | Re-apply the shim after an update overwrote it                                                                                                                           |
+| `status`    | Installed? Shim version, T3 Code version, mod enabled, last errors                                                                                                       |
+| `deploy`    | Copy freshly built bundles into the home (renderer changes then need only Ctrl+R)                                                                                        |
+| `sandbox`   | Copy T3 Code to `.sandbox/`, install there with its own data folders, start it with DevTools on port 9333                                                                |
+| `safe`      | Next launch without the mod                                                                                                                                              |
+| `plugin`    | `list`, `add <link> [id]` (select offers, `--yes` installs every ready offer), `update [id]`, `remove <id>`, `link <folder>` for one plugin or a monorepo in development |
+| `status`    | Also shows a downloaded update waiting to install, and the update helper's last log lines                                                                                |
+| `doctor`    | Check the fuses, original entry, update feed, bundle tokens and runtime DOM hooks                                                                                        |
 
 `install`, `repair` and `uninstall` refuse to run while T3 Code is open (`--wait` waits for it to close). The new shim is built before anything is moved, and a failed swap puts the original back.
 
@@ -293,9 +307,13 @@ t3mode/
 
 ## Testing
 
-- **Unit (vitest).** Now: safe-mode decisions; the asar swap on a fake install (install, refresh, re-apply after an update, uninstall, refusing another mod); option validation, thread keys, keybinding matching (key names, "When" clauses, last rule wins, finding the default key in the file), the settings schema, and the update feed (version order, `app-update.yml` and `<channel>.yml`, picking the release and installer, the signature decision, quoting the helper's command line). For plugins: parsing GitHub links, release URLs and the code wrapper (run in `node:vm`); `PluginStore` end to end against a local HTTP server standing in for GitHub (install, idempotence, the refusals, the hash check, link, remove, update checks); and main's decode, which refuses a local source from page code. Later: runtime lifecycle and disposables, settings migrations.
+- **Unit (vitest).** Now: safe-mode decisions; the asar swap on a fake install (install, refresh, re-apply after an update, uninstall, refusing another mod); option validation, thread keys, keybinding matching (key names, "When" clauses, last rule wins, finding the default key in the file), the settings schema, and the update feed (version order, `app-update.yml` and `<channel>.yml`, picking the release and installer, the signature decision, quoting the helper's command line). For plugins: parsing GitHub links, release URLs and the code wrapper (run in `node:vm`); `PluginStore` end to end against a local HTTP server standing in for GitHub (install, idempotence, the refusals, the hash check, link, remove, update checks, registry offers and partial failures, registry validation, prefixed release assets, monorepo links and atomic failure); and main's decode, which accepts registry GitHub sources and refuses local sources from page code. Later: runtime lifecycle and disposables, settings migrations.
 - **Sandbox.** `pnpm t3mode sandbox`, then DevTools on port 9333. M1 was verified there: badge injected, `desktopBridge` intact, a crashing loader still lets T3 Code boot (error in `shim.log`), `safe` skips one launch, `uninstall` restores the original. M2 was verified there too: plugins found in `userplugins/` and none on a clean clone, settings and options persist, turning a plugin off removes everything it added, and the shortcut is added once, can be rebound in Settings → Keybindings, and can be restored after it's deleted. M3 was verified there: the real nightly feed found `0.1.10-nightly.20261114.4709`, its 372 MB installer downloaded with live progress and passed SHA-512 and signature checks; "Restart now" and a plain quit both ran the helper, the stand-in installer replaced the shim, `repair.cjs` under T3 Code's exe put it back, and after "Restart now" T3 Code started again with its arguments and t3mode loaded. Turning the setting off and on applies at the next launch.
   Standalone plugins were verified there with three linked plugins and a stand-in GitHub (`T3MODE_GITHUB_URL`).
+  Monorepos were verified there on `0.1.10-nightly.20261116.4761`, with a stand-in registry release of three plugins, one missing its assets.
+  - The install panel listed the two ready plugins with their own Install buttons and showed the missing one's reason. Each installed without a reload, and the panel stayed open with it marked installed.
+  - `plugins.json` recorded `source.plugin`, and each installed folder held plain `manifest.json` and `plugin.js`.
+  - A single-plugin release still showed the classic panel. "Check for updates" found a newer registry plugin and updated it. After Ctrl+R, with the stand-in stopped, every plugin loaded from disk.
   - A plugin that doesn't parse is logged and skipped, and one whose top level throws shows "Can't load" with the error. The others and the runtime still start.
   - Installing `acme/example-plugin` from the Plugins page showed the prompt, downloaded both files through `net.fetch`, wrote `plugins.json` and started the plugin without a reload.
   - "Check for updates" found 1.1.0, and "Update to 1.1.0" swapped in the new code and removed the old code's stylesheet.

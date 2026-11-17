@@ -37,6 +37,18 @@ describe("PluginActionSchema", () => {
     for (const action of actions) expect(decode(action)).toEqual(action);
   });
 
+  it("accepts a registry GitHub source and refuses a local source carrying a plugin", () => {
+    const action = {
+      _tag: "install",
+      source: { kind: "github", owner: "owner", repo: "repo", plugin: "alpha" },
+      id: "alpha",
+    };
+    expect(decode(action)).toEqual(action);
+    expect(() =>
+      decode({ ...action, source: { kind: "local", path: "C:/dev", plugin: "alpha" } }),
+    ).toThrow();
+  });
+
   it("refuses a local source, so page code can't make main read a folder", () => {
     expect(() =>
       decode({ _tag: "install", source: { kind: "local", path: "C:/Users" }, id: "my-plugin" }),

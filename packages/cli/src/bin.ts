@@ -310,6 +310,10 @@ const pluginAdd = Command.make(
     link: Argument.String("link").pipe(
       Argument.withDescription("owner/repo, the repository's link, or a release tag's link"),
     ),
+    id: Argument.String("id").pipe(
+      Argument.withDescription("Install only this registry plugin"),
+      Argument.optional,
+    ),
     yes: Flag.Boolean("yes").pipe(
       Flag.withDescription("Install without asking"),
       Flag.withDefault(false),
@@ -317,25 +321,57 @@ const pluginAdd = Command.make(
   },
   Effect.fn(function* (options) {
     const store = yield* pluginStore;
-    const { source, manifest } = yield* store.preview(options.link);
-    yield* Console.log(
-      [
-        `${manifest.name} ${manifest.version}${manifest.author ? ` by ${manifest.author}` : ""}`,
-        `from github.com/${sourceLabel(source)}`,
-        manifest.description,
-        "",
-        "A plugin gets full access to T3 Code, including your threads. Install it only if you trust its author.",
-      ].join("\n"),
-    );
-    if (!options.yes) {
-      const confirmed = yield* Prompt.Confirm({ message: `Install ${manifest.name}?` });
-      if (!confirmed) {
-        yield* Console.log("Nothing was installed.");
-        return;
-      }
+    const preview = yield* store.preview(options.link);
+    for (const offer of preview.offers) {
+      yield* Console.log(
+        offer.kind === "unavailable"
+          ? `${offer.id}: unavailable. ${offer.reason}`
+          : [
+              `${offer.manifest.name} ${offer.manifest.version}${offer.manifest.author ? ` by ${offer.manifest.author}` : ""}`,
+              `from github.com/${sourceLabel(offer.source)}`,
+              offer.manifest.description,
+            ].join("\n"),
+      );
     }
-    const installed = yield* store.install(source, manifest.id);
-    yield* Console.log(`Installed ${installed.name} ${installed.version}. ${RELOAD}`);
+    const requested = Option.getOrUndefined(options.id);
+    if (
+      requested !== undefined &&
+      !preview.offers.some(
+        (offer) => (offer.kind === "ready" ? offer.manifest.id : offer.id) === requested,
+      )
+    ) {
+      return yield* new PluginStore.PluginError({
+        message: `No plugin "${requested}" in this release.`,
+      });
+    }
+    const ready = preview.offers
+      .filter((offer) => offer.kind === "ready")
+      .filter((offer) => requested === undefined || offer.manifest.id === requested);
+    if (ready.length === 0) {
+      yield* Console.log("Nothing was installed.");
+      return;
+    }
+    yield* Console.log(
+      "A plugin gets full access to T3 Code, including your threads. Install it only if you trust its author.",
+    );
+    const selected = options.yes
+      ? ready
+      : ready.length === 1
+        ? (yield* Prompt.Confirm({ message: `Install ${ready[0]!.manifest.name}?` }))
+          ? ready
+          : []
+        : yield* Prompt.MultiSelect({
+            message: "Choose plugins to install",
+            choices: ready.map((offer) => ({
+              title: `${offer.manifest.name} (${offer.manifest.id})`,
+              value: offer,
+            })),
+          });
+    if (selected.length === 0) yield* Console.log("Nothing was installed.");
+    for (const offer of selected) {
+      const installed = yield* store.install(offer.source, offer.manifest.id);
+      yield* Console.log(`Installed ${installed.name} ${installed.version}. ${RELOAD}`);
+    }
   }),
 ).pipe(Command.withDescription("Install a plugin from a GitHub release"));
 
@@ -393,7 +429,12 @@ const pluginLink = Command.make(
   Effect.fn(function* (options) {
     const linked = yield* (yield* pluginStore).link(options.folder);
     yield* Console.log(
-      `Linked ${linked.name} ${linked.version}. After each rebuild, reload T3 Code (Ctrl+R) to pick it up.`,
+      linked
+        .map(
+          (plugin) =>
+            `Linked ${plugin.name} ${plugin.version}. After each rebuild, reload T3 Code (Ctrl+R) to pick it up.`,
+        )
+        .join("\n"),
     );
   }),
 ).pipe(Command.withDescription("Use a plugin you are developing, read from its folder"));
@@ -422,6 +463,16 @@ root.pipe(
     plugin,
   ]),
   Command.run({ version: T3MODE_VERSION }),
+  // runMain's process.exit, while fetch is still closing its sockets, aborts Node on Windows.
+  Effect.catchTag("PluginError", (error) =>
+    Console.error(error.message).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          process.exitCode = 1;
+        }),
+      ),
+    ),
+  ),
   Effect.provide(MainLayer),
   NodeRuntime.runMain,
 );

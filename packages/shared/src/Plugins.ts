@@ -12,7 +12,13 @@ export const PLUGIN_API_VERSION = 1;
 
 export const PLUGIN_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-export const PLUGIN_FILES = { manifest: "manifest.json", code: "plugin.js" } as const;
+export const PLUGIN_FILES = {
+  manifest: "manifest.json",
+  code: "plugin.js",
+  registry: "t3mode.json",
+} as const;
+
+export const MAX_REGISTRY_PLUGINS = 50;
 
 export const MAX_PLUGIN_CODE_BYTES = 5 * 1024 * 1024;
 export const MAX_PLUGIN_MANIFEST_BYTES = 64 * 1024;
@@ -33,6 +39,7 @@ export interface GithubSource {
   readonly owner: string;
   readonly repo: string;
   readonly tag?: string;
+  readonly plugin?: string;
 }
 
 export interface LocalSource {
@@ -82,9 +89,13 @@ export interface InstalledPlugin {
   readonly update?: string;
 }
 
+export type PluginOffer =
+  | { readonly kind: "ready"; readonly source: GithubSource; readonly manifest: Manifest }
+  | { readonly kind: "unavailable"; readonly id: string; readonly reason: string };
+
 export interface PluginPreview {
-  readonly source: GithubSource;
-  readonly manifest: Manifest;
+  readonly repo: GithubSource;
+  readonly offers: ReadonlyArray<PluginOffer>;
 }
 
 export type RemoveResult = "removed" | "not-installed";
@@ -107,6 +118,11 @@ export interface PageScript {
 const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
 const REPO = /^[A-Za-z0-9._-]{1,100}$/;
 const TAG = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/;
+
+export const isPluginRoute = (value: string): boolean =>
+  !value.includes("\\") &&
+  !/^[A-Za-z]:/.test(value) &&
+  value.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
 
 export const isPluginId = (value: string): boolean => PLUGIN_ID_PATTERN.test(value);
 export const isGithubOwner = (value: string): boolean => OWNER.test(value);
@@ -152,13 +168,16 @@ export const parseGithubSource = (input: string): GithubSource | undefined => {
   return short ? githubSource(short[1]!, short[2]!, short[3]) : undefined;
 };
 
+export const releaseAssetName = (source: GithubSource, file: string): string =>
+  source.plugin === undefined ? file : `${source.plugin}.${file}`;
+
 export const releaseAssetUrl = (base: string, source: GithubSource, file: string): string => {
   const repo = `${base.replace(/\/+$/, "")}/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}`;
   const release =
     source.tag === undefined
       ? "releases/latest/download"
       : `releases/download/${encodeURIComponent(source.tag)}`;
-  return `${repo}/${release}/${encodeURIComponent(file)}`;
+  return `${repo}/${release}/${encodeURIComponent(releaseAssetName(source, file))}`;
 };
 
 export const sourceLabel = (source: PluginSource): string =>

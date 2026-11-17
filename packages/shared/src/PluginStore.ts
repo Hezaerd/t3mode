@@ -19,6 +19,9 @@ import {
   isGithubRepo,
   isGithubTag,
   isPluginId,
+  isPluginRoute,
+  MAX_REGISTRY_PLUGINS,
+  type PluginOffer,
   lockEntry,
   type LockEntry,
   type Lockfile,
@@ -34,6 +37,7 @@ import {
   type PluginPreview,
   type RemoveResult,
   pluginScriptName,
+  releaseAssetName,
   releaseAssetUrl,
   sameRepoOrFolder,
   sourceLabel,
@@ -60,6 +64,7 @@ export const GithubSourceSchema = Schema.Struct({
   owner: matching(isGithubOwner, "a GitHub owner"),
   repo: matching(isGithubRepo, "a GitHub repository name"),
   tag: Schema.optionalKey(matching(isGithubTag, "a release tag")),
+  plugin: Schema.optionalKey(PluginIdSchema),
 });
 
 const PluginSourceSchema = Schema.Union([
@@ -79,6 +84,27 @@ export const ManifestSchema = Schema.Struct({
   ),
 });
 
+export const RegistrySchema = Schema.Struct({
+  plugins: Schema.Record(
+    Schema.String,
+    matching(isPluginRoute, "a relative POSIX plugin route"),
+  ).check(
+    Schema.makeFilter((plugins) => Object.keys(plugins).every(isPluginId), {
+      expected: "plugin ids as keys",
+    }),
+    Schema.makeFilter(
+      (plugins) =>
+        Object.keys(plugins).length > 0 && Object.keys(plugins).length <= MAX_REGISTRY_PLUGINS,
+      { expected: `1 to ${MAX_REGISTRY_PLUGINS} plugins` },
+    ),
+  ),
+});
+
+class DownloadNotFound extends Schema.TaggedError<DownloadNotFound>()("DownloadNotFound", {
+  message: Schema.String,
+  release: Schema.String,
+}) {}
+
 export const LockfileSchema = Schema.Struct({
   version: Schema.Literal(1),
   // A key Schema would drop entries with a bad id silently; this fails the whole file instead.
@@ -96,6 +122,7 @@ export const LockfileSchema = Schema.Struct({
   ),
 });
 
+const RegistryJson = Schema.fromJsonString(RegistrySchema);
 const ManifestJson = Schema.fromJsonString(ManifestSchema);
 const LockfileJson = Schema.fromJsonString(LockfileSchema);
 
@@ -124,7 +151,7 @@ export class PluginStore extends Context.Service<
     ) => Effect.Effect<InstalledPlugin, PluginError>;
     readonly update: (id: string) => Effect.Effect<InstalledPlugin, PluginError>;
     readonly remove: (id: string) => Effect.Effect<RemoveResult, PluginError>;
-    readonly link: (path: string) => Effect.Effect<InstalledPlugin, PluginError>;
+    readonly link: (path: string) => Effect.Effect<ReadonlyArray<InstalledPlugin>, PluginError>;
     readonly checkUpdates: Effect.Effect<UpdateCheck, PluginError>;
   }
 >()("@t3mode/shared/PluginStore") {}
@@ -170,6 +197,14 @@ const checkManifest = (manifest: Manifest, where: string, expectedId?: string) =
 };
 
 const fail = (message: string) => (cause: unknown) => new PluginError({ message, cause });
+
+const decodeRegistry = (text: string) =>
+  Schema.decodeEffect(RegistryJson)(text).pipe(
+    Effect.mapError(
+      (cause) =>
+        new PluginError({ message: `Invalid t3mode.json: ${describeSchemaError(cause)}`, cause }),
+    ),
+  );
 
 const failed = (plugin: InstalledPlugin, error: string) => ({
   plugin: { ...plugin, error },
@@ -312,7 +347,7 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
     code: wrapPluginCode(id, decoder.decode(code)),
   });
 
-  const download = Effect.fn("PluginStore.download")(function* (
+  const probe = Effect.fn("PluginStore.probe")(function* (
     source: GithubSource,
     file: string,
     maxBytes: number,
@@ -326,8 +361,9 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
       .get(url)
       .pipe(Effect.mapError(fail(`Could not reach GitHub for ${release}.`)));
     if (response.status === 404) {
-      return yield* new PluginError({
-        message: `No ${file} in ${release}. Check the link, and that the release has manifest.json and plugin.js.`,
+      return yield* new DownloadNotFound({
+        release,
+        message: `No ${releaseAssetName(source, file)} in ${release}. Check the link, and that the release has ${releaseAssetName(source, PLUGIN_FILES.manifest)} and ${releaseAssetName(source, PLUGIN_FILES.code)}.`,
       });
     }
     if (response.status !== 200) {
@@ -353,12 +389,19 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
     return { bytes: concat(chunks, size), release };
   });
 
-  const fetchManifest = Effect.fn("PluginStore.fetchManifest")(function* (source: GithubSource) {
-    const { bytes, release } = yield* download(
-      source,
-      PLUGIN_FILES.manifest,
-      MAX_PLUGIN_MANIFEST_BYTES,
+  const download = (source: GithubSource, file: string, maxBytes: number) =>
+    probe(source, file, maxBytes).pipe(
+      Effect.catchTag("DownloadNotFound", (error) =>
+        Effect.fail(new PluginError({ message: error.message })),
+      ),
     );
+
+  const fetchManifest = Effect.fn("PluginStore.fetchManifest")(function* (
+    source: GithubSource,
+    downloaded?: { bytes: Uint8Array; release: string },
+  ) {
+    const { bytes, release } =
+      downloaded ?? (yield* download(source, PLUGIN_FILES.manifest, MAX_PLUGIN_MANIFEST_BYTES));
     const text = decoder.decode(bytes);
     const manifest = yield* Schema.decodeEffect(ManifestJson)(text).pipe(
       Effect.mapError(
@@ -406,10 +449,50 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
         message: `"${input.trim()}" is not a GitHub repository. Use owner/repo or the repository's link.`,
       });
     }
-    const { manifest, release } = yield* fetchManifest(source);
-    yield* checkManifest(manifest, release);
-    yield* checkConflict(yield* readLock, manifest.id, source);
-    return { source, manifest } satisfies PluginPreview;
+    const single = yield* probe(source, PLUGIN_FILES.manifest, MAX_PLUGIN_MANIFEST_BYTES).pipe(
+      Effect.catchTag("DownloadNotFound", () => Effect.undefined),
+    );
+    const current = yield* readLock;
+    if (single !== undefined) {
+      const { manifest, release } = yield* fetchManifest(source, single);
+      yield* checkManifest(manifest, release);
+      yield* checkConflict(current, manifest.id, source);
+      return {
+        repo: source,
+        offers: [{ kind: "ready", source, manifest }],
+      } satisfies PluginPreview;
+    }
+    const registry = yield* probe(source, PLUGIN_FILES.registry, MAX_PLUGIN_MANIFEST_BYTES).pipe(
+      Effect.catchTag("DownloadNotFound", (error) =>
+        Effect.fail(
+          new PluginError({
+            message: `No manifest.json or t3mode.json in ${error.release}. Check the link, and that the release has the plugin's files.`,
+          }),
+        ),
+      ),
+    );
+    const { plugins } = yield* decodeRegistry(decoder.decode(registry.bytes));
+    const offers = yield* Effect.forEach(
+      Object.keys(plugins),
+      (id) =>
+        Effect.gen(function* () {
+          const selected = { ...source, plugin: id };
+          const { manifest, release } = yield* fetchManifest(selected);
+          yield* checkManifest(manifest, release, id);
+          yield* checkConflict(current, id, selected);
+          return { kind: "ready", source: selected, manifest } satisfies PluginOffer;
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.succeed({
+              kind: "unavailable",
+              id,
+              reason: error.message,
+            } satisfies PluginOffer),
+          ),
+        ),
+      { concurrency: 4 },
+    );
+    return { repo: source, offers } satisfies PluginPreview;
   });
 
   const install = Effect.fn("PluginStore.install")(
@@ -453,32 +536,58 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
   }, withLock);
 
   const link = Effect.fn("PluginStore.link")(function* (input: string) {
-    const folder = path.resolve(input);
-    const manifestText = yield* fs
-      .readFileString(path.join(folder, PLUGIN_FILES.manifest))
-      .pipe(Effect.mapError(fail(`${folder} has no readable manifest.json.`)));
-    const manifest = yield* Schema.decodeEffect(ManifestJson)(manifestText).pipe(
-      Effect.mapError(
-        (cause) =>
-          new PluginError({
-            message: `The manifest.json in ${folder} is invalid: ${describeSchemaError(cause)}`,
-            cause,
-          }),
-      ),
-    );
-    yield* checkManifest(manifest, folder);
-    const hasCode = yield* fs
-      .exists(path.join(folder, PLUGIN_FILES.code))
-      .pipe(Effect.orElseSucceed(() => false));
-    if (!hasCode) {
-      return yield* new PluginError({ message: `${folder} has no plugin.js. Build it first.` });
-    }
-    const source = { kind: "local", path: folder } as const;
+    const rootFolder = path.resolve(input);
+    const registryFile = path.join(rootFolder, PLUGIN_FILES.registry);
     const current = yield* readLock;
-    yield* checkConflict(current, manifest.id, source);
-    const entry: LockEntry = { source, version: manifest.version };
-    yield* writeLock({ ...current, plugins: { ...current.plugins, [manifest.id]: entry } });
-    return (yield* inspect(manifest.id, entry)).plugin;
+    const routes = (yield* fs
+      .exists(registryFile)
+      .pipe(Effect.mapError(fail(`Could not read ${registryFile}.`))))
+      ? Object.entries(
+          (yield* decodeRegistry(
+            yield* fs
+              .readFileString(registryFile)
+              .pipe(Effect.mapError(fail(`Could not read ${registryFile}.`))),
+          )).plugins,
+        )
+      : ([[undefined, ""]] as const);
+    const entries = yield* Effect.forEach(routes, ([id, route]) =>
+      Effect.gen(function* () {
+        const folder = path.resolve(rootFolder, route);
+        const manifestText = yield* fs
+          .readFileString(path.join(folder, PLUGIN_FILES.manifest))
+          .pipe(Effect.mapError(fail(`${folder} has no readable manifest.json.`)));
+        const manifest = yield* Schema.decodeEffect(ManifestJson)(manifestText).pipe(
+          Effect.mapError(
+            (cause) =>
+              new PluginError({
+                message: `The manifest.json in ${folder} is invalid: ${describeSchemaError(cause)}`,
+                cause,
+              }),
+          ),
+        );
+        yield* checkManifest(manifest, folder, id);
+        const hasCode = yield* fs
+          .exists(path.join(folder, PLUGIN_FILES.code))
+          .pipe(Effect.orElseSucceed(() => false));
+        if (!hasCode) {
+          return yield* new PluginError({ message: `${folder} has no plugin.js. Build it first.` });
+        }
+        const source = { kind: "local", path: folder } as const;
+        yield* checkConflict(current, manifest.id, source);
+        const entry: LockEntry = { source, version: manifest.version };
+        return { id: manifest.id, entry };
+      }),
+    );
+    yield* writeLock({
+      ...current,
+      plugins: {
+        ...current.plugins,
+        ...Object.fromEntries(entries.map(({ id, entry }) => [id, entry])),
+      },
+    });
+    return yield* Effect.forEach(entries, ({ id, entry }) =>
+      inspect(id, entry).pipe(Effect.map(({ plugin }) => plugin)),
+    );
   }, withLock);
 
   const checkUpdates = Effect.gen(function* () {

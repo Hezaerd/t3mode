@@ -1,6 +1,6 @@
 # Example t3mode plugin
 
-A starting point for a [t3mode](https://github.com/Hezaerd/t3mode) plugin. Copy this folder into a repository of its own.
+A starting point for a [t3mode](https://github.com/Hezaerd/t3mode) plugin. This template publishes one plugin from its repository. t3mode also supports several plugins in one repository through a root `t3mode.json`. See the [plugin architecture](https://github.com/Hezaerd/t3mode/blob/main/docs/architecture.md#5-plugins-packagesplugin-sdk-packagessharedsrcplugints) for the registry and release layout.
 
 ## Make it yours
 
