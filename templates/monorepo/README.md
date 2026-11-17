@@ -37,7 +37,7 @@ Commit `pnpm-lock.yaml`. Bump any plugin's manifest version and push to `main`. 
 
 The workflow builds and validates every plugin. It compares their versions with the latest release's `<id>.manifest.json` assets. A changed version or a missing plugin publishes a release. The first run publishes when the repository has no release.
 
-Each release uses the tag `r-<short commit sha>`. A rerun skips a tag that already exists. Every release carries the root `t3mode.json` verbatim and every plugin's `<id>.manifest.json` and `<id>.plugin.js`. Unchanged plugins are included too, because t3mode downloads each plugin from the latest release.
+Each release uses the tag `r-<short commit sha>`. A rerun skips a tag that already exists. Every release carries the root `t3mode.json` verbatim and every plugin's `<id>.manifest.json` and `<id>.plugin.js`. A plugin whose manifest names a `backend`, an `mcp` script or `files` also gets each of them as `<id>.<name>`. Unchanged plugins are included too, because t3mode downloads each plugin from the latest release.
 
 Run the validation and asset staging locally after a build.
 
