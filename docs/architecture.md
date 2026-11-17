@@ -95,13 +95,14 @@ Everything here runs **synchronously** (`Effect.runSync` over sync file access),
 
    Safe mode still runs the updater (step 5), so an update during safe mode doesn't silently uninstall t3mode.
 
-   Safe mode leaves plugin tool servers registered (see Plugins). Claude and Codex start them as their own processes, so they can't stop T3 Code from booting, and safe mode protects only that boot.
+   Safe mode starts no plugin backend. It leaves plugin tool servers registered (see Plugins). Claude and Codex start them as their own processes, so they can't stop T3 Code from booting, and safe mode protects only that boot.
 
 2. **Settings and state.** JSON files written atomically (write a temp file, then rename), decoded with `Schema`.
 3. **IPC.** `t3mode:*` handlers. Every handler checks that the call comes from the main frame of the main T3 Code window. The surface is small and allowlisted.
 4. **Preload registration** through `session.registerPreloadScript` on every session. The preload itself exits outside the main window.
 5. **Updater** (`Updater.ts`, see Updates). Before T3 Code's main runs, it sets `T3CODE_DISABLE_AUTO_UPDATE=1` unless the user handed updates back to T3 Code.
-6. **Boot the original**, always, even when steps 1 to 5 fail.
+6. **Plugin programs** (`Reconcile.ts`, `Backends.ts`, see Plugins). After app ready, one reconcile starts the enabled plugins' backends and registers their tool servers.
+7. **Boot the original**, always, even when steps 1 to 6 fail.
 
 ### 3. Preload (`packages/preload`)
 
@@ -114,7 +115,7 @@ Everything here runs **synchronously** (`Effect.runSync` over sync file access),
 
 Runs in the page, as one classic script with no imports. Plain TypeScript, no Effect: it is small, runs once per page load, and Effect would add about 100 kB to a script that the preload hands to `executeJavaScript` on every reload.
 
-- `renderer.ts` reads `info` and settings from main, starts the `Runtime`, adds the settings entry and the shortcut, then calls `ready()` so the crash guard counts the launch as healthy.
+- `renderer.ts` reads `info` and settings from main, starts the `Runtime`, follows the plugin backends, starts the plugins, adds the settings entry and the shortcut, then calls `ready()` so the crash guard counts the launch as healthy. Following the backends first means a plugin sees its backend's status from its first `onStatus` call.
 - `Runtime` starts and stops plugins and keeps settings in memory. Each change is written back through `writeSettings`, which validates it with a Schema in main before it reaches `settings.json`.
 - **Disposables.** Everything a plugin creates goes through its API (`css`, `observe`, `listen`, `interval`, `element`, `settingsPanel`, `onCleanup`) and is undone newest first when the plugin stops. Changing an option restarts the plugin.
 - **Fault isolation (sync only in v1).** `start` and every API callback are wrapped. A plugin that throws is stopped, its changes are undone, the error goes to `main.log` and a toast points to the settings page, where Retry starts it again. For a plugin that couldn't load, Retry first reads its files again, so a fixed linked plugin starts without a reload. Errors in a plugin's own promises are not attributed yet.
@@ -135,12 +136,12 @@ Runs in the page, as one classic script with no imports. Plain TypeScript, no Ef
 
 **Decided: plugins installed from GitHub.** Authors can publish one plugin or several plugins from one repository. Users paste the repository link on the Plugins page and choose what to install. The repo ships no plugins. This replaces the M2 decision, where plugins were compiled into `renderer.js` from a git-ignored `userplugins/` folder.
 
-**Trust.** A plugin runs in T3 Code's main world, with the same reach as T3 Code's own page code. That includes the DOM, `window.desktopBridge` and `window.t3modeNative`. It can't be sandboxed without losing the DOM, which is the reason plugins exist. So installing a plugin means trusting its author, as with a VS Code extension or an Obsidian plugin. t3mode does four things about it.
+**Trust.** A plugin's page code runs in T3 Code's main world, with the same reach as T3 Code's own page code. That includes the DOM, `window.desktopBridge` and `window.t3modeNative`. It can't be sandboxed without losing the DOM, which is the reason plugins exist. The page is one trust domain: every plugin's page code, T3 Code's code and t3mode's runtime share it, and nothing in it can tell them apart. So the plugin API is cooperative, not a boundary, and a plugin's backend and tool server have the user's full rights. Installing a plugin means trusting its author, as with a VS Code extension or an Obsidian plugin. t3mode does four things about it.
 
 - It shows the repo, author and version, with a warning, before it installs anything.
 - It pins each install to its version and the SHA-256 of its code.
 - It never updates a plugin without a click.
-- Safe mode starts T3 Code without any plugin code in its window. Tool servers stay registered with Claude and Codex, because they run outside T3 Code and can't break its boot.
+- Safe mode starts T3 Code without any plugin code in its window, and without any backend. Tool servers stay registered with Claude and Codex, because they run outside T3 Code and can't break its boot.
 
 **A plugin folder** holds a manifest, page code, and optional program files. An installed copy and a linked dev build use these names. A single-plugin release uses them too.
 
@@ -183,7 +184,7 @@ One GitHub release contains `t3mode.json`, `<id>.manifest.json`, and `<id>.plugi
 
 **Program files.** API 1 manifests can name a `backend` script, an `mcp` script, and a `files` array of extra assets. Script names end in `.js` or `.cjs`. File names contain 1 to 100 letters, digits, dots, underscores, or hyphens, start with a letter or digit, and don't end in a dot. No two extra names may differ only by case, because Windows stores them as one file. Reserved names are `manifest.json`, `plugin.js`, and `t3mode.json`. The deduplicated extra set holds at most 20 files. Release assets use plain names for standalone plugins and `<id>.<name>` for registry plugins.
 
-`plugin.js` has a 5 MiB cap. Each backend or MCP script has a 20 MiB cap. Each extra asset has a 64 MiB cap. All extras together have a 128 MiB cap. Downloads enforce the caps while streaming. The `mcp` script runs as a tool server (below). The `backend` script doesn't run yet.
+`plugin.js` has a 5 MiB cap. Each backend or MCP script has a 20 MiB cap. Each extra asset has a 64 MiB cap. All extras together have a 128 MiB cap. Downloads enforce the caps while streaming. The `mcp` script runs as a tool server, and the `backend` script as the plugin's backend (both below).
 
 **The lockfile.** `<home>/plugins.json` lists what's installed, as `{ "version": 1, "plugins": { "<id>": { "source", "version", "sha256"?, "files"?, "backend"?, "mcp"?, "approved"? } } }`. A source is one of two kinds.
 
@@ -205,7 +206,7 @@ The optional GitHub source field `plugin` selects a registry id. Downloads prefi
 
 **Updates.** "Check for updates" on the Plugins page, and `plugin update` in the CLI, fetch each unpinned GitHub plugin's latest `manifest.json` (`<id>.manifest.json` for a registry plugin) and compare versions. A newer one shows "Update to x.y" on its card. Nothing updates on its own, because a new release is new code. An update that adds backend access, MCP access, or socket patterns outside the approved patterns asks for approval before downloading code. The page lists the declared access and retries after approval. `plugin update --yes` approves without asking.
 
-**Tool servers.** A plugin's `mcp` script is an MCP server over stdio, and it gives the plugin's tools to the agents T3 Code runs. For each enabled GitHub plugin with an `mcp` script whose pinned files all match, t3mode writes an entry named `t3mode-<id>` in two configs:
+**Tool servers.** A plugin's `mcp` script is an MCP server over stdio, and it gives the plugin's tools to the agents T3 Code runs. For each enabled plugin with an `mcp` script, t3mode writes an entry named `t3mode-<id>` in two configs. A GitHub plugin's pinned files must all match. A linked plugin's script must exist.
 
 - Claude's user config: `~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json`, under `mcpServers`;
 - Codex's: `~/.codex/config.toml`, or `$CODEX_HOME/config.toml`, as a `[mcp_servers.t3mode-<id>]` table.
@@ -218,9 +219,9 @@ The entry runs T3 Code's own exe on the script, with `ELECTRON_RUN_AS_NODE=1`. U
 - **Claude.** `.claude.json` is written only when its content changes, through a temp file and a rename. A file that doesn't parse is left alone.
 - **Concurrent writes.** Claude and Codex rewrite their own config while they run. So each edit reads the file again just before its rename, and starts over from the new text when the file changed. After three tries it gives up, logs it, and the next reconcile tries again. The window for losing a write shrinks to that one read and rename.
 - **Missing providers.** A provider that isn't set up is skipped: no `.claude.json`, or no Codex folder.
-- **When.** Main reconciles the entries at launch, after app ready, and after every settings write. It also reconciles after every install, update and remove from the page. A run with nothing to change writes nothing and starts no process. Safe mode leaves the entries as they are. The CLI reconciles after `plugin add`, `update` and `remove`, and `uninstall` removes this home's entries.
+- **When.** Main reconciles the entries at launch, after app ready, and after every settings write. It also reconciles after every install, update and remove from the page, and when the page loads again (Ctrl+R). A run with nothing to change writes nothing and starts no process. Safe mode leaves the entries as they are. The CLI reconciles after `plugin add`, `update`, `remove` and `link`, and `uninstall` removes this home's entries.
 - **Picking up changes.** Claude starts a server for each chat. Codex keeps one per `codex.exe`. A new entry is therefore used from the next Claude chat or the next Codex process.
-- **Linked plugins.** Their tool servers aren't registered, because their scripts live outside `<home>/plugins/` where the update helper looks. Register one by hand while developing.
+- **Linked plugins.** Their tool servers are registered from their own folders. Those folders are outside `<home>/plugins/`, so main hands the update helper the folders of the enabled linked plugins that declare `mcp`, and the helper stops tool servers running from them too.
 - **Other providers.** Only Claude and Codex are covered. T3 Code's other providers are untested.
 - **Module type.** `<home>/plugins/package.json` holds `{ "type": "commonjs" }`. Node takes a `.js` file's module type from the nearest `package.json` above it. A user's `~/package.json` with `"type": "module"` would otherwise make every plugin script ESM, and `require` would fail.
 
@@ -229,12 +230,23 @@ The entry runs T3 Code's own exe on the script, with `ELECTRON_RUN_AS_NODE=1`. U
 - an update with a live tool server failed halfway, with one file replaced and a hash mismatch;
 - a remove deleted the lockfile entry, then failed on the folder.
 
-So one operation stops every process running T3 Code's exe whose command line names a file under `<home>/plugins/<id>/`, and waits for those processes to exit. It also matches on the exe, which spares Explorer or an editor opened on the folder.
+So one operation stops every process running T3 Code's exe whose command line names a file under `<home>/plugins/<id>/`, and waits for those processes to exit. It also matches on the exe, which spares Explorer or an editor opened on the folder. That finds tool servers. It can't find a backend: Electron starts a utility process with its own command line, which doesn't name the script. So main stops a backend itself, through the supervisor that started it.
 
-- An update runs it after its downloads and before its first write.
-- A remove runs it before deleting the folder. The folder is deleted before the lockfile entry, so a remove that fails can run again.
-- Disabling a plugin runs it once the plugin's entries are gone.
-- The update helper has its own copy (see Updates).
+- An update stops the plugin's backend and tool servers after its downloads and before its first write. The backend stays stopped until the update is written, then the reconcile starts the new version.
+- A remove does the same before deleting the folder. The folder is deleted before the lockfile entry, so a remove that fails can run again. The plugin's storage file and data folder go last.
+- Disabling a plugin stops its backend through the reconcile, and its tool servers once its entries are gone.
+- The CLI can't reach main's supervisor. While T3 Code runs, `plugin update` and `plugin remove` refuse a plugin with a backend, and say to use the Plugins page or close T3 Code.
+- The update helper has its own copy (see Updates). Backends exit with T3 Code, before the helper starts.
+
+**Backends.** A plugin's `backend` script is a program that runs beside T3 Code for as long as the plugin is on. It is the plugin's own Node process, for work that page code can't do, such as loading a native module.
+
+- **One process each.** Main starts one Electron `utilityProcess` per enabled plugin with a backend, after app ready. A GitHub plugin's backend starts only when its pinned files all match. A linked plugin's runs from its folder. The process runs `backend-host.cjs` from `<home>/dist`, which loads the script with `require`. The script's default export is `defineBackend({ start })` from the SDK. `start(api)` gets `id`, `dataDir`, `send`, `onMessage` and `log`.
+- **One reconcile.** `Reconcile.ts` compares the enabled plugins with what runs, and `Backends.ts` starts, stops and restarts processes to match. It is the reconcile that registers tool servers (above), so it runs at the same times. A backend restarts when its files change: a GitHub plugin's pinned hashes, or a linked plugin's script modification time, so a rebuild and Ctrl+R pick it up. A disabled plugin runs no backend code.
+- **Messages.** Page code calls `api.backend.send(data)`, and gets the backend's messages through `api.backend.onMessage` and its state through `api.backend.onStatus`. Data is anything structured clone copies. Main routes every message by the plugin id of the process it spawned, so a backend's messages always reach its own plugin. Page calls are cooperative: the page is one trust domain, and nothing stops a plugin's page code from calling `window.t3modeNative.backend` with another plugin's id. `send` resolves to false when no backend runs, and the host queues messages that arrive before the script calls `onMessage`.
+- **Crashes.** A throw in `start`, an uncaught error, a rejected promise or an exit is a crash. Main restarts the backend after 1 s, then 2 s, 4 s, up to 10 s. After 3 crashes within 60 s it gives up. The plugin's card shows "Backend stopped after 3 crashes" with the first line of the error, and Retry starts it again. A new version, or turning the plugin off and on, clears the crash record.
+- **Data and logs.** Each backend gets `<home>/plugin-data/<id>/`, created before `start` and deleted when the plugin is removed. Its stdout, stderr and `api.log` lines go to `<home>/logs/plugins/<id>.log`, with a timestamp per line. A log over 2 MiB moves to `<id>.old.log` when the backend starts.
+- **Quit.** Main kills every backend in Electron's `will-quit`, before the update helper starts.
+- **Isolation.** Each backend is a separate process. A crash, a hang or a leak in one doesn't reach T3 Code's main process or other plugins' backends, and main restarts only that one. That is crash containment, not a sandbox: a backend runs with the user's full rights, like any program they start.
 
 **Loading.** The preload asks main for the page scripts. These are each installed plugin's `plugin.js`, wrapped by main, then `renderer.js`. The preload runs each one with its own `webFrame.executeJavaScript` call and `//# sourceURL=t3mode-plugin/<id>.js`, so a plugin that doesn't parse can't stop the others or the runtime. The wrapper registers the plugin's module under its manifest id without running it.
 
@@ -253,7 +265,7 @@ So one operation stops every process running T3 Code's exe whose command line na
 
 The runtime calls `load()` inside its fault isolation, so an error in a plugin's top-level code stops only that plugin. It calls `load()` only for a plugin that is on, the first time it starts. A plugin that is off runs none of its code, not even its top level, so its options appear once it is first turned on. A plugin in `plugins.json` whose code didn't register, or whose files fail their checks, shows "Can't load" with the reason, and its card keeps Remove. After an install or update from the page, the preload's `loadPlugin(id)` runs the new code, and the runtime swaps it in without a reload.
 
-**API.** `PluginApi` is a public contract, versioned by `api`. Besides the disposables above, it gives plugins the helpers that know T3 Code. These are `queryFirst`, `currentThreadKey`, `react.findPropsUp` and `react.findHookState`. They stay in t3mode, so when a nightly breaks one, a single t3mode fix repairs every plugin that uses it. `toast(message, kind?)` and `ui` reuse t3mode's own toast and settings components for the same reason. A toast from a plugin that has stopped is dropped. `disks()` returns each local fixed drive's root, size and free space. Main reads them with one `Win32_LogicalDisk` query, cached for 30 seconds and shared by every plugin. It skips network and removable drives, which can block for seconds when offline. The SDK marks it optional because older t3mode builds lack it.
+**API.** `PluginApi` is a public contract, versioned by `api`. Besides the disposables above, it gives plugins the helpers that know T3 Code. These are `queryFirst`, `currentThreadKey`, `react.findPropsUp` and `react.findHookState`. They stay in t3mode, so when a nightly breaks one, a single t3mode fix repairs every plugin that uses it. `toast(message, kind?)` and `ui` reuse t3mode's own toast and settings components for the same reason. A toast from a plugin that has stopped is dropped. `disks()` returns each local fixed drive's root, size and free space. Main reads them with one `Win32_LogicalDisk` query, cached for 30 seconds and shared by every plugin. It skips network and removable drives, which can block for seconds when offline. The SDK marks it optional because older t3mode builds lack it. `backend` (SDK 1.4.0) is optional for the same reason.
 
 **Writing a plugin.** `templates/plugin` is a starting point. It has the SDK, a build that writes `dist/manifest.json` and `dist/plugin.js`, and a GitHub Action that publishes release `v<version>` with both files when a push to `main` carries a `manifest.json` version that has no release yet. Link its `dist/` folder while developing. `templates/monorepo` is the same for several plugins in one repository. Its workflow publishes release `r-<short sha>` with every plugin when any manifest version differs from the latest release, and `plugin link` on its root links them all.
 
@@ -262,7 +274,7 @@ The runtime calls `load()` inside its fault isolation, so an error in a plugin's
 
 ### 6. CLI (`packages/cli`)
 
-`t3mode <command>`. The CLI ships as `t3mode` on npm (`npx t3mode <command>`, or `npm install --global t3mode`): `dist/t3mode.cjs` is the whole CLI in one CommonJS file with no dependencies, and `dist/bundles/` holds the bundles that `install` and `deploy` copy into the home (shim, loader, preload, renderer, update helper; `repair.cjs` sits next to `t3mode.cjs`). The build defines `__T3MODE_PACKAGED__` in that bundle, so `Artifacts.ts` reads from `dist/` there and from each package's `dist/` when the repo runs it from source with `pnpm t3mode`. `.github/workflows/publish-cli.yml` publishes it when `packages/cli/package.json` has a version npm doesn't have. That version must equal `T3MODE_VERSION`. `sandbox` only runs from the repo.
+`t3mode <command>`. The CLI ships as `t3mode` on npm (`npx t3mode <command>`, or `npm install --global t3mode`): `dist/t3mode.cjs` is the whole CLI in one CommonJS file with no dependencies, and `dist/bundles/` holds the bundles that `install` and `deploy` copy into the home (shim, loader, preload, renderer, update helper, backend host; `repair.cjs` sits next to `t3mode.cjs`). The build defines `__T3MODE_PACKAGED__` in that bundle, so `Artifacts.ts` reads from `dist/` there and from each package's `dist/` when the repo runs it from source with `pnpm t3mode`. `.github/workflows/publish-cli.yml` publishes it when `packages/cli/package.json` has a version npm doesn't have. That version must equal `T3MODE_VERSION`. `sandbox` only runs from the repo.
 
 | Command     | Does                                                                                                                                                                     |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -306,7 +318,7 @@ In both, the helper is a PowerShell script. It can't be T3 Code's exe in Node mo
 - **Check** (`Updater.ts`, `UpdateFeed.ts`). 20 s after start, then every hour, and on "Check now": read `app-update.yml`, list the repo's releases through GitHub's API, take the newest release on the channel that has `<channel>.yml`, read it, and compare versions (semver with prerelease fields, so nightlies order by date and build). Requests go through Electron's `net.fetch`, so system proxies apply as they do for T3 Code.
 - **Download and verify.** The installer for the CPU (`…-x64.exe` or `…-arm64.exe`) goes to `<home>/updates/<version>/`, with progress shown live on the T3 Mode page. It must match the size and SHA-512 from `<channel>.yml`, and `Get-AuthenticodeSignature` must report a valid signature whose common name is a publisher from `app-update.yml` ("T3 Tools Inc"). Anything else is deleted and reported. `updates/ready.json` records the verified installer, so a download survives a restart; the next launch after the install sees the new version and deletes it.
 - **Install on quit.** In Electron's `will-quit`, if an update is ready, the loader starts `update-helper.ps1` (deployed to `<home>/dist`), which:
-  1. waits for every process running from the install folder to exit (up to 2 minutes, else it gives up until the next quit). Plugin tool servers run T3 Code's exe, and Claude or Codex sessions outside T3 Code can keep them alive. Each time the helper checks, it stops every process of an exe in the install folder whose command line names a file under `<home>/plugins/`. Any other process still holds the update;
+  1. waits for every process running from the install folder to exit (up to 2 minutes, else it gives up until the next quit). Plugin tool servers run T3 Code's exe, and Claude or Codex sessions outside T3 Code can keep them alive. Each time the helper checks, it stops every process of an exe in the install folder whose command line names a file under `<home>/plugins/` or under a linked plugin's folder that main passed it (`-PluginFolders`). Plugin backends exit with T3 Code, because main kills them in `will-quit`. Any other process still holds the update;
   2. runs the installer with `--updated /S` and waits for it;
   3. re-applies the shim by running `repair.cjs` with T3 Code's new exe in Node mode (`ELECTRON_RUN_AS_NODE=1`, with `process.noAsar` so .asar files are moved as files). `repair.cjs` is the CLI's own `applyShim`, bundled, so the CLI and the helper share one tested swap;
   4. after "Restart now", starts T3 Code again with the arguments it had.
@@ -352,7 +364,17 @@ t3mode/
 - **Unit (vitest).** Now: safe-mode decisions; the asar swap on a fake install (install, refresh, re-apply after an update, uninstall, refusing another mod); option validation, thread keys, keybinding matching (key names, "When" clauses, last rule wins, finding the default key in the file), the settings schema, and the update feed (version order, `app-update.yml` and `<channel>.yml`, picking the release and installer, the signature decision, quoting the helper's command line). For plugins: parsing GitHub links, release URLs and the code wrapper (run in `node:vm`); `PluginStore` end to end against a local HTTP server standing in for GitHub (install, idempotence, the refusals, the hash check, link, remove, update checks, registry offers and partial failures, registry validation, prefixed release assets, monorepo links and atomic failure); and main's decode, which accepts registry GitHub sources and refuses local sources from page code. Later: runtime lifecycle and disposables, settings migrations.
 - **Sandbox.** `pnpm t3mode sandbox`, then DevTools on port 9333. M1 was verified there: badge injected, `desktopBridge` intact, a crashing loader still lets T3 Code boot (error in `shim.log`), `safe` skips one launch, `uninstall` restores the original. M2 was verified there too: plugins found in `userplugins/` and none on a clean clone, settings and options persist, turning a plugin off removes everything it added, and the shortcut is added once, can be rebound in Settings → Keybindings, and can be restored after it's deleted. M3 was verified there: the real nightly feed found `0.1.10-nightly.20261114.4709`, its 372 MB installer downloaded with live progress and passed SHA-512 and signature checks; "Restart now" and a plain quit both ran the helper, the stand-in installer replaced the shim, `repair.cjs` under T3 Code's exe put it back, and after "Restart now" T3 Code started again with its arguments and t3mode loaded. Turning the setting off and on applies at the next launch.
   Standalone plugins were verified there with three linked plugins and a stand-in GitHub (`T3MODE_GITHUB_URL`).
-  Monorepos were verified there on `0.1.10-nightly.20261116.4761`, with a stand-in registry release of three plugins, one missing its assets.
+  Backends were verified there on `0.1.10-nightly.20261116.4800`, with a stand-in GitHub release whose backend loads a native `.node` file, and a linked plugin with a backend and a tool server.
+  - A message went from page code to the backend and back. The backend's data folder and log were written.
+  - Two crashes restarted it after 1 s and 2 s. The third left it stopped, and the card showed the error with Retry, which started it again. A backend that throws in `start` gave up the same way, with the thrown message as the reason, and an update to a fixed version cleared it.
+  - Turning the plugin off stopped its process, and turning it on started a new one.
+  - An update from the Plugins page, with the `.node` file loaded, restarted the backend once on the new version, in 0.6 s. A `plugin update` from the CLI while T3 Code ran refused with a message.
+  - A remove stopped the backend, then deleted the plugin folder and the data folder.
+  - Ctrl+R kept a GitHub plugin's backend running, and restarted a linked one whose script changed.
+  - Safe mode started no backend. A launch started the enabled ones.
+  - At quit, main stopped the backends before the update helper started, and the helper stopped a tool server running from the linked folder, then installed the update.
+  - The linked tool server was registered in `~/.claude.json` and `config.toml`. After the plugin was removed, both files matched their backups.
+    Monorepos were verified there on `0.1.10-nightly.20261116.4761`, with a stand-in registry release of three plugins, one missing its assets.
   - The install panel listed the two ready plugins with their own Install buttons and showed the missing one's reason. Each installed without a reload, and the panel stayed open with it marked installed.
   - `plugins.json` recorded `source.plugin`, and each installed folder held plain `manifest.json` and `plugin.js`.
   - A single-plugin release still showed the classic panel. "Check for updates" found a newer registry plugin and updated it. After Ctrl+R, with the stand-in stopped, every plugin loaded from disk.

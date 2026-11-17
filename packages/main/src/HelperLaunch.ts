@@ -36,6 +36,8 @@ export interface HelperArguments {
   readonly relaunch: boolean;
   readonly relaunchArgs: ReadonlyArray<string>;
   readonly keepUpdaterEnv: boolean;
+  /** Linked plugin folders whose tool servers the helper stops, besides <home>/plugins/. */
+  readonly pluginFolders: ReadonlyArray<string>;
 }
 
 /** powershell.exe arguments that run update-helper.ps1 (see its `param` block). */
@@ -71,4 +73,6 @@ export const helperArguments = (options: HelperArguments): ReadonlyArray<string>
   Buffer.from(JSON.stringify(options.relaunchArgs)).toString("base64"),
   "-KeepUpdaterEnv",
   options.keepUpdaterEnv ? "1" : "0",
+  "-PluginFolders",
+  Buffer.from(JSON.stringify(options.pluginFolders)).toString("base64"),
 ];

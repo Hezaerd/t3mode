@@ -30,6 +30,7 @@ const main = async (): Promise<void> => {
     ]);
     const runtime = new Runtime(native, installed, settings, info, pluginData);
     window.__t3modeRuntime = runtime;
+    await runtime.followBackends();
     runtime.startAll();
     runtime.watchUpdates();
     const page = new SettingsPage(runtime);

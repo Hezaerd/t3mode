@@ -7,6 +7,7 @@ import { app, ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from "
 import { Channel, type Info, isMainWindowUrl } from "@t3mode/shared/Ipc";
 import { T3MODE_VERSION } from "@t3mode/shared/Version";
 
+import { Backends } from "./Backends.ts";
 import { BootGuard } from "./BootGuard.ts";
 import { Disks } from "./Disks.ts";
 import { withElectronFetch } from "./ElectronFetch.ts";
@@ -16,7 +17,7 @@ import { LocalSockets } from "./LocalSockets.ts";
 import { PluginHost } from "./PluginHost.ts";
 import { SettingsStore } from "./SettingsStore.ts";
 import { ShortcutActionSchema, T3Keybindings } from "./T3Keybindings.ts";
-import { ToolServers } from "./ToolServers.ts";
+import { Reconcile } from "./Reconcile.ts";
 import { Updater } from "./Updater.ts";
 
 const UpdateActionSchema = Schema.Literals(["status", "check", "restart"]);
@@ -63,7 +64,7 @@ const logAt = (level: (typeof LogArgs.Type)[0], message: string) => {
   }
 };
 
-/** Install, update and remove change which tool servers are registered. */
+/** Install, update and remove change which backends and tool servers run. */
 const changesPlugins = (action: unknown) =>
   typeof action === "object" &&
   action !== null &&
@@ -88,7 +89,8 @@ export const register = Effect.fn("Ipc.register")(function* (options: {
   const keybindings = yield* T3Keybindings;
   const updater = yield* Updater;
   const disks = yield* Disks;
-  const toolServers = yield* ToolServers;
+  const reconcile = yield* Reconcile;
+  const backends = yield* Backends;
   // Pages that asked for the update status get every change pushed to them.
   const subscribed = new WeakSet<WebContents>();
   const subscribe = (sender: WebContents) =>
@@ -123,7 +125,7 @@ export const register = Effect.fn("Ipc.register")(function* (options: {
     handle(Channel.pluginScript, (args) => plugins.pluginScript(args[0]));
     handle(Channel.plugins, (args) =>
       withElectronFetch(plugins.act(args[0])).pipe(
-        Effect.tap(() => (changesPlugins(args[0]) ? toolServers.refresh : Effect.void)),
+        Effect.tap(() => (changesPlugins(args[0]) ? reconcile.refresh : Effect.void)),
       ),
     );
     handle(Channel.log, (args) =>
@@ -133,14 +135,19 @@ export const register = Effect.fn("Ipc.register")(function* (options: {
         ),
       ),
     );
+    // A reload (Ctrl+R) also picks up a linked plugin's rebuilt backend.
     handle(Channel.ready, () =>
-      guard.markHealthy.pipe(Effect.andThen(Effect.logInfo("Renderer ready"))),
+      guard.markHealthy.pipe(
+        Effect.andThen(Effect.logInfo("Renderer ready")),
+        Effect.andThen(reconcile.refresh),
+      ),
     );
+    handle(Channel.backend, (args, event) => backends.act(args[0], event.sender));
     handle(Channel.readPluginData, () => pluginData.read);
     handle(Channel.writePluginData, (args) => pluginData.write(args[0], args[1]));
     handle(Channel.readSettings, () => settings.read);
     handle(Channel.writeSettings, (args) =>
-      settings.write(args[0]).pipe(Effect.tap(() => toolServers.refresh)),
+      settings.write(args[0]).pipe(Effect.tap(() => reconcile.refresh)),
     );
     handle(Channel.openLogs, () => openPath(layout.logs));
     handle(Channel.disks, () => disks.list);

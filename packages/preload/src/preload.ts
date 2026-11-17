@@ -4,6 +4,7 @@
 // manages.
 import { contextBridge, ipcRenderer, webFrame } from "electron";
 
+import type { BackendAction, BackendEvent } from "@t3mode/shared/Backends";
 import {
   Channel,
   type Info,
@@ -97,6 +98,11 @@ const start = (): void => {
       await runScript(script);
     },
     disks: () => ipcRenderer.invoke(Channel.disks),
+    backend: (action: BackendAction) =>
+      ipcRenderer.invoke(Channel.backend, action) as Promise<boolean>,
+    onBackendEvent: (listener) => {
+      ipcRenderer.on(Channel.backendEvent, (_event, event: BackendEvent) => listener(event));
+    },
   };
   contextBridge.exposeInMainWorld("t3modeNative", bridge);
   const logError = (message: string) => bridge.log("error", message).catch(() => undefined);

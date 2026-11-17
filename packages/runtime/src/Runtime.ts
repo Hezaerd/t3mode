@@ -1,6 +1,7 @@
 // Starts and stops plugins. Everything a plugin creates goes through its API and is undone,
 // newest first, when it stops. A plugin that throws is stopped and reported; the others keep running.
 import type { OptionsSpec, PluginApi, PluginDefinition, PluginReport } from "@t3mode/plugin-sdk";
+import type { BackendEvent, BackendStatus } from "@t3mode/shared/Backends";
 import type { Info, NativeBridge } from "@t3mode/shared/Ipc";
 import type {
   Access,
@@ -44,6 +45,11 @@ type Entry =
   | { readonly info: InstalledPlugin; readonly kind: "broken"; readonly reason: string }
   // Registered but never run: a plugin that is off runs none of its code, not even its top level.
   | { readonly info: InstalledPlugin; readonly kind: "unloaded"; readonly load: () => unknown };
+
+interface BackendListener {
+  readonly message?: (data: unknown) => void;
+  readonly status?: (status: BackendStatus | null) => void;
+}
 
 export interface PluginRegistry {
   readonly push: (...registrations: ReadonlyArray<PluginRegistration>) => number;
@@ -99,6 +105,8 @@ export class Runtime {
   readonly #listeners = new Set<() => void>();
   readonly #updateListeners = new Set<(status: UpdateStatus) => void>();
   readonly #panels = new Map<string, SettingsPanel>();
+  readonly #backends = new Map<string, BackendStatus>();
+  readonly #backendListeners = new Map<string, Set<BackendListener>>();
   #settings: Settings;
   #update: UpdateStatus | undefined;
   readonly info: Info;
@@ -132,6 +140,44 @@ export class Runtime {
       },
     };
     for (const plugin of installed) this.#entries.set(plugin.id, this.#entryFor(plugin));
+  }
+
+  /**
+   * Follows the plugins' backends. Main sends the current statuses before it answers, so plugins
+   * started after this see their backend's status from the first call.
+   */
+  async followBackends(): Promise<void> {
+    this.#native.onBackendEvent((event) => this.#onBackendEvent(event));
+    await this.#native.backend({ _tag: "subscribe" }).catch((error: unknown) => {
+      this.log("warn", `Could not follow plugin backends: ${describe(error)}`);
+    });
+  }
+
+  /** The plugin's backend, as main last reported it. Null: none runs. */
+  backendStatus(id: string): BackendStatus | null {
+    return this.#backends.get(id) ?? null;
+  }
+
+  #onBackendEvent(event: BackendEvent): void {
+    if (event._tag === "status") {
+      if (event.status) this.#backends.set(event.plugin, event.status);
+      else this.#backends.delete(event.plugin);
+      this.#emit();
+    }
+    for (const listener of this.#backendListeners.get(event.plugin) ?? []) {
+      if (event._tag === "message") listener.message?.(event.data);
+      else listener.status?.(event.status);
+    }
+  }
+
+  #listenBackend(id: string, listener: BackendListener, add: (cleanup: () => void) => void): void {
+    let listeners = this.#backendListeners.get(id);
+    if (!listeners) {
+      listeners = new Set();
+      this.#backendListeners.set(id, listeners);
+    }
+    listeners.add(listener);
+    add(() => listeners.delete(listener));
   }
 
   get plugins(): ReadonlyArray<InstalledPlugin> {
@@ -210,6 +256,13 @@ export class Runtime {
   }
 
   async retry(id: string): Promise<void> {
+    if (this.backendStatus(id)?.state === "failed") {
+      await this.#native.backend({ _tag: "retry", plugin: id }).catch((error: unknown) => {
+        this.log("warn", `Could not restart the backend of ${id}: ${describe(error)}`);
+      });
+    }
+    const kind = this.state(id).kind;
+    if (kind !== "failed" && kind !== "unavailable") return;
     const entry = this.#entries.get(id);
     if (!entry) return;
     this.#stop(id);
@@ -579,6 +632,20 @@ export class Runtime {
       currentThreadKey,
       react: { findPropsUp, findHookState },
       disks: () => this.#native.disks(),
+      // Cooperative, like the rest of this API: main routes by plugin id, but page code shares
+      // one window, so nothing stops a plugin from calling the bridge itself.
+      backend: {
+        send: (data) =>
+          alive()
+            ? this.#native.backend({ _tag: "send", plugin: id, data })
+            : Promise.resolve(false),
+        onMessage: (callback) => this.#listenBackend(id, { message: guard(callback) }, add),
+        onStatus: (callback) => {
+          const run = guard(callback);
+          this.#listenBackend(id, { status: run }, add);
+          run(this.backendStatus(id));
+        },
+      },
     };
 
     try {

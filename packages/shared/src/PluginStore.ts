@@ -56,7 +56,6 @@ import {
   wrapPluginCode,
 } from "./Plugins.ts";
 import { compareVersions, parseVersion } from "./Semver.ts";
-import type { ToolServer } from "./ToolServers.ts";
 
 export const AccessSchema = Schema.Struct({
   backend: Schema.Boolean,
@@ -175,15 +174,38 @@ export interface UpdateCheck {
   readonly failures: Readonly<Record<string, string>>;
 }
 
+/** An installed plugin's programs: what main runs or registers for it, when it is enabled. */
+export interface PluginProgram {
+  readonly id: string;
+  /** `<home>/plugins/<id>`, or a linked plugin's own folder. */
+  readonly folder: string;
+  readonly linked: boolean;
+  /** The tool server script's absolute path. */
+  readonly mcp?: string;
+  /** The backend script's absolute path. */
+  readonly backend?: string;
+  /**
+   * Changes when the programs' files change: the pinned hashes of a GitHub plugin, or the
+   * backend script's modification time for a linked one, so a rebuild restarts it.
+   */
+  readonly version: string;
+}
+
 export interface PluginStoreOptions {
   readonly layout: HomeLayout;
   readonly githubBase: string;
   /**
-   * Stops the processes running from a plugin's folder, so its files can be replaced or deleted
-   * (Windows keeps a loaded `.node` file locked). Called before an update writes and before a
-   * remove deletes, for plugins with a tool server or backend. Defaults to doing nothing.
+   * Stops a plugin's processes, so its files can be replaced or deleted (Windows keeps a loaded
+   * `.node` file locked). Called before an update writes and before a remove deletes, for GitHub
+   * plugins with a tool server or backend; `backend` says whether the installed version has one.
+   * It returns what to run once the files are written or deleted, whatever the outcome. Defaults
+   * to doing nothing.
    */
-  readonly stopProcesses?: (folder: string) => Effect.Effect<void, PluginError>;
+  readonly stopProcesses?: (
+    id: string,
+    folder: string,
+    backend: boolean,
+  ) => Effect.Effect<Effect.Effect<void>, PluginError>;
 }
 
 export class PluginStore extends Context.Service<
@@ -205,8 +227,11 @@ export class PluginStore extends Context.Service<
     readonly remove: (id: string) => Effect.Effect<RemoveResult, PluginError>;
     readonly link: (path: string) => Effect.Effect<ReadonlyArray<InstalledPlugin>, PluginError>;
     readonly checkUpdates: Effect.Effect<UpdateCheck, PluginError>;
-    /** The tool servers of installed GitHub plugins whose pinned files all match. */
-    readonly toolServers: Effect.Effect<ReadonlyArray<ToolServer>>;
+    /**
+     * The tool servers and backends of installed plugins that load: GitHub plugins whose pinned
+     * files all match, and linked plugins whose scripts exist.
+     */
+    readonly programs: Effect.Effect<ReadonlyArray<PluginProgram>>;
   }
 >()("@t3mode/shared/PluginStore") {}
 
@@ -362,9 +387,11 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
     entry.source.kind === "github" ? path.join(layout.plugins, id) : entry.source.path;
 
   const stopProcesses = (id: string, entry: LockEntry | undefined) =>
-    entry?.source.kind === "github" && (entry.mcp !== undefined || entry.backend !== undefined)
-      ? (options.stopProcesses?.(path.join(layout.plugins, id)) ?? Effect.void)
-      : Effect.void;
+    entry?.source.kind === "github" &&
+    (entry.mcp !== undefined || entry.backend !== undefined) &&
+    options.stopProcesses
+      ? options.stopProcesses(id, path.join(layout.plugins, id), entry.backend !== undefined)
+      : Effect.succeed(Effect.void);
 
   const inspect = Effect.fn("PluginStore.inspect")(function* (id: string, entry: LockEntry) {
     const base: InstalledPlugin = {
@@ -425,6 +452,52 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
       }
     }
     return { plugin: described, code: code.value };
+  });
+
+  /** A program script's absolute path, or undefined when it isn't there to run. */
+  const programScript = Effect.fn("PluginStore.programScript")(function* (
+    folder: string,
+    entry: LockEntry,
+    name: string | undefined,
+  ) {
+    if (name === undefined) return undefined;
+    // A GitHub plugin's inspect checked every pinned file; a script must be one of them.
+    if (entry.source.kind === "github") {
+      return entry.files?.[name] === undefined ? undefined : path.join(folder, name);
+    }
+    const file = path.join(folder, name);
+    return (yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false))) ? file : undefined;
+  });
+
+  /** A plugin's runnable programs, or undefined when it has none or doesn't load. */
+  const program = Effect.fn("PluginStore.program")(function* (id: string, entry: LockEntry) {
+    if (entry.mcp === undefined && entry.backend === undefined) return undefined;
+    if ((yield* inspect(id, entry)).plugin.error !== undefined) return undefined;
+    const folder = folderOf(id, entry);
+    const linked = entry.source.kind === "local";
+    const mcp = yield* programScript(folder, entry, entry.mcp);
+    const backend = yield* programScript(folder, entry, entry.backend);
+    if (mcp === undefined && backend === undefined) return undefined;
+    const modified =
+      linked && backend !== undefined
+        ? yield* fs.stat(backend).pipe(
+            Effect.map((info) => Option.getOrUndefined(info.mtime)?.getTime()),
+            Effect.orElseSucceed(() => undefined),
+          )
+        : undefined;
+    const version = linked
+      ? `${entry.version}@${modified ?? 0}`
+      : Object.entries(entry.files ?? {})
+          .map(([name, hash]) => `${name}:${hash}`)
+          .join(",");
+    return {
+      id,
+      folder,
+      linked,
+      ...(mcp === undefined ? {} : { mcp }),
+      ...(backend === undefined ? {} : { backend }),
+      version,
+    } satisfies PluginProgram;
   });
 
   const inspectAll = readLock.pipe(
@@ -551,8 +624,8 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
     }
     const hashes: Record<string, string> = {};
     for (const [name, bytes] of Object.entries(files)) hashes[name] = yield* sha256Hex(bytes);
-    // After the downloads, so the plugin's tool server is down for as short a time as possible.
-    yield* stopProcesses(manifest.id, previous);
+    // After the downloads, so the plugin's programs are down for as short a time as possible.
+    const resume = yield* stopProcesses(manifest.id, previous);
     const entry: LockEntry = {
       source,
       version: manifest.version,
@@ -562,16 +635,18 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
       ...(manifest.mcp === undefined ? {} : { mcp: manifest.mcp }),
       approved: access,
     };
-    yield* writeCodeThenManifestThenLock(manifest.id, files, manifestBytes, {
-      ...current,
-      plugins: { ...current.plugins, [manifest.id]: entry },
-    });
-    for (const name of Object.keys(previous?.files ?? {})) {
-      if (!Object.hasOwn(files, name))
-        yield* fs
-          .remove(path.join(layout.plugins, manifest.id, name), { force: true })
-          .pipe(Effect.mapError(fail(`Could not delete ${name}.`)));
-    }
+    yield* Effect.gen(function* () {
+      yield* writeCodeThenManifestThenLock(manifest.id, files, manifestBytes, {
+        ...current,
+        plugins: { ...current.plugins, [manifest.id]: entry },
+      });
+      for (const name of Object.keys(previous?.files ?? {})) {
+        if (!Object.hasOwn(files, name))
+          yield* fs
+            .remove(path.join(layout.plugins, manifest.id, name), { force: true })
+            .pipe(Effect.mapError(fail(`Could not delete ${name}.`)));
+      }
+    }).pipe(Effect.ensuring(resume));
     yield* Effect.logInfo(`Installed ${manifest.id} ${manifest.version} from ${release}`);
     return (yield* inspect(manifest.id, entry)).plugin;
   });
@@ -664,16 +739,22 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
       Object.entries(current.plugins).filter(([key]) => key !== id),
     );
     // The folder goes first: when it can't be deleted, the plugin stays listed and remove can run again.
-    yield* stopProcesses(id, entry);
-    if (entry.source.kind === "github") {
+    const resume = yield* stopProcesses(id, entry);
+    yield* Effect.gen(function* () {
+      if (entry.source.kind === "github") {
+        yield* fs
+          .remove(path.join(layout.plugins, id), { recursive: true, force: true })
+          .pipe(Effect.mapError(fail(`Could not delete ${path.join(layout.plugins, id)}.`)));
+      }
+      yield* writeLock({ ...current, plugins });
+      // Page storage, then the backend's data folder.
       yield* fs
-        .remove(path.join(layout.plugins, id), { recursive: true, force: true })
-        .pipe(Effect.mapError(fail(`Could not delete ${path.join(layout.plugins, id)}.`)));
-    }
-    yield* writeLock({ ...current, plugins });
-    yield* fs
-      .remove(path.join(layout.pluginData, `${id}.json`), { force: true })
-      .pipe(Effect.mapError(fail(`Could not delete data for ${id}.`)));
+        .remove(path.join(layout.pluginData, `${id}.json`), { force: true })
+        .pipe(Effect.mapError(fail(`Could not delete data for ${id}.`)));
+      yield* fs
+        .remove(path.join(layout.pluginData, id), { recursive: true, force: true })
+        .pipe(Effect.mapError(fail(`Could not delete the data folder of ${id}.`)));
+    }).pipe(Effect.ensuring(resume));
     yield* Effect.logInfo(`Removed ${id}`);
     return "removed" as const;
   }, withLock);
@@ -784,25 +865,13 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
     remove,
     link,
     checkUpdates,
-    toolServers: readLock.pipe(
+    programs: readLock.pipe(
       Effect.orElseSucceed(() => EMPTY_LOCK),
       Effect.flatMap((current) =>
-        Effect.forEach(Object.entries(current.plugins), ([id, entry]) =>
-          entry.source.kind !== "github" ||
-          entry.mcp === undefined ||
-          entry.files?.[entry.mcp] === undefined
-            ? Effect.succeed([])
-            : inspect(id, entry).pipe(
-                Effect.map(({ plugin }) =>
-                  plugin.error === undefined
-                    ? [{ id, script: path.join(layout.plugins, id, entry.mcp!) }]
-                    : [],
-                ),
-              ),
-        ),
+        Effect.forEach(Object.entries(current.plugins), ([id, entry]) => program(id, entry)),
       ),
-      Effect.map((servers) => servers.flat()),
-      Effect.withSpan("PluginStore.toolServers"),
+      Effect.map((programs) => programs.flatMap((item) => (item ? [item] : []))),
+      Effect.withSpan("PluginStore.programs"),
     ),
   });
 });

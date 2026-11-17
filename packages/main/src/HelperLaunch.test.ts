@@ -46,11 +46,15 @@ describe("helperArguments", () => {
       relaunch: true,
       relaunchArgs: ["--flag=a b"],
       keepUpdaterEnv: false,
+      pluginFolders: [String.raw`D:\dev\computer use\dist`],
     });
     const at = (name: string) => args[args.indexOf(name) + 1];
     expect(at("-ParentPid")).toBe("42");
     expect(at("-Relaunch")).toBe("1");
     expect(at("-KeepUpdaterEnv")).toBe("0");
+    expect(JSON.parse(Buffer.from(at("-PluginFolders") ?? "", "base64").toString())).toEqual([
+      String.raw`D:\dev\computer use\dist`,
+    ]);
     expect(JSON.parse(Buffer.from(at("-RelaunchArgs") ?? "", "base64").toString())).toEqual([
       "--flag=a b",
     ]);

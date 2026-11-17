@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import type { PluginAction } from "@t3mode/shared/Ipc";
 import { homeLayout } from "@t3mode/shared/Layout";
 
+import { Backends } from "./Backends.ts";
 import * as Files from "./Files.ts";
 import { Home } from "./Home.ts";
 import { PluginActionSchema, make } from "./PluginHost.ts";
@@ -87,6 +88,16 @@ const build = (layout: ReturnType<typeof homeLayout>) =>
             Layer.provideMerge(Layer.mergeAll(NodeFileSystem.layer, NodePathLayer.layer)),
           ),
           FetchHttpClient.layer,
+          Layer.succeed(
+            Backends,
+            Backends.of({
+              apply: () => Effect.void,
+              hold: () => Effect.void,
+              release: () => Effect.void,
+              act: () => Effect.succeed(true),
+              stopAll: Effect.void,
+            }),
+          ),
         ),
       ),
     ),
