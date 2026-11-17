@@ -383,7 +383,11 @@ export const sync = Effect.fn("ToolServers.sync")(function* (options: {
     yield* fs.readFileString(marker).pipe(
       Effect.orElseSucceed(() => ""),
       Effect.flatMap((text) =>
-        text === COMMONJS_MARKER ? Effect.void : fs.writeFileString(marker, COMMONJS_MARKER),
+        text === COMMONJS_MARKER
+          ? Effect.void
+          : fs
+              .makeDirectory(options.pluginsFolder, { recursive: true })
+              .pipe(Effect.andThen(fs.writeFileString(marker, COMMONJS_MARKER))),
       ),
       Effect.catch((error) =>
         Effect.sync(() => {
