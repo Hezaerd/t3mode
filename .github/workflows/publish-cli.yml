@@ -4,7 +4,8 @@
 # The package holds every bundle t3mode installs (shim, loader, preload, renderer, repair, update
 # helper), so any package can change what it ships.
 # npm trusts this workflow by its filename (npm trusted publishing), so no token is stored here.
-# Pull requests run everything up to a dry-run publish.
+# Pull requests run everything up to a dry-run publish, which only runs for a new version: npm
+# refuses even a dry run over a version it already has.
 name: Publish CLI
 
 on:
@@ -71,7 +72,7 @@ jobs:
           npm install --force "$tarball"
           npx t3mode --version
       - name: Dry run
-        if: github.event_name == 'pull_request' || steps.version.outputs.published == 'true'
+        if: github.event_name == 'pull_request' && steps.version.outputs.published == 'false'
         run: npm publish "$RUNNER_TEMP"/cli/*.tgz --access public --dry-run
       - name: Publish ${{ steps.version.outputs.version }}
         if: github.event_name != 'pull_request' && steps.version.outputs.published == 'false'
