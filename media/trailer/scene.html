@@ -1,0 +1,82 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="scene.css" />
+  </head>
+  <body>
+    <div id="camera">
+      <div id="shell" class="shell">
+        <div id="titlebar" class="titlebar">
+          <i></i><i></i><i></i><span id="title">T3 Code</span>
+        </div>
+        <div id="chat" class="layer">
+          <div class="sidebar">
+            <b style="top: 40px; width: 64px"></b>
+            <b style="top: 84px; width: 52px"></b>
+            <b style="top: 128px; width: 60px"></b>
+          </div>
+          <div id="ask" class="bubble"></div>
+          <div id="refuse" class="reply muted" style="top: 268px">
+            <i class="dot" style="background: var(--error)"></i>I can't see or use your desktop.
+          </div>
+          <div id="tool-screenshot" class="tool" style="top: 268px"></div>
+          <div id="tool-click" class="tool" style="top: 330px"></div>
+          <div id="tool-type" class="tool" style="top: 392px"></div>
+          <div id="done" class="reply" style="top: 476px">
+            <i class="dot" style="background: var(--ok)"></i>Posted the screenshot in #release.
+          </div>
+          <div class="composer"></div>
+        </div>
+        <div id="json" class="layer"></div>
+        <div id="pagebody" class="layer label"><b>Page</b><code>plugin.js</code></div>
+        <div id="pill" class="layer words"></div>
+      </div>
+
+      <div id="diagram" class="layer" style="width: 1080px; height: 1080px">
+        <svg id="wires" width="1080" height="1080">
+          <path id="wire-page" pathLength="1" d="M496 216 H584" />
+          <path id="wire-claude" pathLength="1" d="M496 508 H620 V454 H744" />
+          <path id="wire-codex" pathLength="1" d="M496 508 H620 V564 H744" />
+        </svg>
+        <div id="frame" class="abs frame">
+          <div class="tag">own process</div>
+          <div id="crashed" class="status" style="color: var(--error)">crashed</div>
+          <div id="restarted" class="status" style="color: var(--ok)">restarted</div>
+        </div>
+        <div id="backend" class="node">
+          <div id="backend-label" class="label"><b>Backend</b><code>backend.js</code></div>
+        </div>
+        <div id="tools" class="node">
+          <div id="tools-label" class="label"><b>Tool server</b><code>tools.js · MCP</code></div>
+        </div>
+        <div id="files" class="node"></div>
+        <div id="keeps" class="abs keeps" style="left: 96px; top: 356px">
+          <i class="dot" style="background: var(--ok)"></i>T3 Code keeps running
+        </div>
+        <div id="chip-claude" class="abs chip" style="left: 744px; top: 418px">Claude</div>
+        <div id="chip-codex" class="abs chip" style="left: 744px; top: 528px">Codex</div>
+        <div
+          id="lock"
+          class="abs panel"
+          style="left: 96px; top: 668px; width: 500px; height: 316px"
+        >
+          <h6>lockfile</h6>
+        </div>
+        <div
+          id="dialog"
+          class="abs panel dialog"
+          style="left: 636px; top: 668px; width: 348px; height: 236px"
+        >
+          <p>Update wants <em>backend, tools</em>. Allow?</p>
+        </div>
+      </div>
+
+      <div id="build" class="layer"></div>
+      <div id="tagline" class="layer"></div>
+      <div id="logo" class="wordmark" style="top: 340px">t3<em>mode</em></div>
+      <div id="credit" class="credit" style="top: 930px">A community project for T3 Code</div>
+    </div>
+    <script type="module" src="scene.js"></script>
+  </body>
+</html>
