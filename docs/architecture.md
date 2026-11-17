@@ -178,7 +178,7 @@ One GitHub release contains `t3mode.json`, `<id>.manifest.json`, and `<id>.plugi
 
 `plugin link <folder>` reads the root registry and resolves every route from that folder. Each built manifest must match its registry key. The store validates every plugin before writing the lockfile once. Without a registry, the command links the folder as one plugin.
 
-**Program files.** API 1 manifests can name a `backend` script, an `mcp` script, and a `files` array of extra assets. Script names end in `.js` or `.cjs`. File names contain 1 to 100 letters, digits, dots, underscores, or hyphens and start with a letter or digit. Reserved names are `manifest.json`, `plugin.js`, and `t3mode.json`. The deduplicated extra set holds at most 20 files. Release assets use plain names for standalone plugins and `<id>.<name>` for registry plugins.
+**Program files.** API 1 manifests can name a `backend` script, an `mcp` script, and a `files` array of extra assets. Script names end in `.js` or `.cjs`. File names contain 1 to 100 letters, digits, dots, underscores, or hyphens, start with a letter or digit, and don't end in a dot. No two extra names may differ only by case, because Windows stores them as one file. Reserved names are `manifest.json`, `plugin.js`, and `t3mode.json`. The deduplicated extra set holds at most 20 files. Release assets use plain names for standalone plugins and `<id>.<name>` for registry plugins.
 
 `plugin.js` has a 5 MiB cap. Each backend or MCP script has a 20 MiB cap. Each extra asset has a 64 MiB cap. All extras together have a 128 MiB cap. Downloads enforce the caps while streaming. These files do not run yet.
 

@@ -13,16 +13,18 @@ import { HttpClient, HttpClientRequest } from "effect/http";
 
 import type { HomeLayout } from "./Layout.ts";
 import {
-  type Access,
+  type Approval,
   accessGrew,
   declaredAccess,
   extraFiles,
+  extraFilesCollide,
   isPluginFile,
   isPluginScript,
   MAX_PLUGIN_SCRIPT_BYTES,
   MAX_PLUGIN_ASSET_BYTES,
   MAX_PLUGIN_EXTRA_BYTES,
   MAX_PLUGIN_EXTRA_FILES,
+  NO_ACCESS,
   type GithubSource,
   type InstalledPlugin,
   isGithubOwner,
@@ -106,6 +108,9 @@ export const ManifestSchema = Schema.Struct({
   Schema.makeFilter((manifest) => extraFiles(manifest).length <= MAX_PLUGIN_EXTRA_FILES, {
     expected: "at most 20 extra files",
   }),
+  Schema.makeFilter((manifest) => !extraFilesCollide(manifest), {
+    expected: "extra file names that differ by more than case",
+  }),
 );
 
 export const RegistrySchema = Schema.Struct({
@@ -184,11 +189,11 @@ export class PluginStore extends Context.Service<
     readonly install: (
       source: GithubSource,
       expectedId: string,
-      approved?: boolean | Access,
+      approved: Approval,
     ) => Effect.Effect<InstalledPlugin, PluginError>;
     readonly update: (
       id: string,
-      approved?: boolean | Access,
+      approved?: Approval,
     ) => Effect.Effect<InstalledPlugin, PluginError>;
     readonly remove: (id: string) => Effect.Effect<RemoveResult, PluginError>;
     readonly link: (path: string) => Effect.Effect<ReadonlyArray<InstalledPlugin>, PluginError>;
@@ -494,7 +499,7 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
   const installNow = Effect.fn("PluginStore.installNow")(function* (
     source: GithubSource,
     expectedId: string,
-    approved: boolean | Access = false,
+    approved: Approval | undefined,
   ) {
     const { manifest, bytes: manifestBytes, release } = yield* fetchManifest(source);
     yield* checkManifest(manifest, release, expectedId);
@@ -502,11 +507,8 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
     yield* checkConflict(current, manifest.id, source);
     const previous = lockEntry(current, manifest.id);
     const access = declaredAccess(manifest);
-    const baseline =
-      typeof approved === "object"
-        ? approved
-        : (previous?.approved ?? { backend: false, mcp: false, sockets: [] });
-    if (approved !== true && accessGrew(baseline, access)) {
+    const baseline = approved ?? previous?.approved ?? NO_ACCESS;
+    if (baseline !== "any" && accessGrew(baseline, access)) {
       return yield* new PluginError({
         message: previous
           ? "This update asks for new access."
@@ -616,15 +618,12 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
   });
 
   const install = Effect.fn("PluginStore.install")(
-    (source: GithubSource, expectedId: string, approved: boolean | Access = true) =>
+    (source: GithubSource, expectedId: string, approved: Approval) =>
       installNow(source, expectedId, approved),
     withLock,
   );
 
-  const update = Effect.fn("PluginStore.update")(function* (
-    id: string,
-    approved: boolean | Access = false,
-  ) {
+  const update = Effect.fn("PluginStore.update")(function* (id: string, approved?: Approval) {
     const entry = yield* entryOf(id);
     if (entry.source.kind === "local") {
       return yield* new PluginError({

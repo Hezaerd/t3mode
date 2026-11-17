@@ -29,6 +29,7 @@ export const MAX_PLUGIN_EXTRA_BYTES = 128 * 1024 * 1024;
 export const MAX_PLUGIN_EXTRA_FILES = 20;
 export const isPluginFile = (name: string): boolean =>
   /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(name) &&
+  !name.endsWith(".") &&
   !Object.values(PLUGIN_FILES).some((reserved) => reserved.toLowerCase() === name.toLowerCase());
 export const isPluginScript = (name: string): boolean =>
   isPluginFile(name) && /\.(?:js|cjs)$/.test(name);
@@ -38,6 +39,11 @@ export interface Access {
   readonly mcp: boolean;
   readonly sockets: ReadonlyArray<string>;
 }
+
+export const NO_ACCESS: Access = { backend: false, mcp: false, sockets: [] };
+
+/** The access a user approved, or "any" for `plugin update --yes`. */
+export type Approval = Access | "any";
 
 export const declaredAccess = (
   manifest: Pick<Manifest, "backend" | "mcp" | "sockets">,
@@ -66,6 +72,12 @@ export const extraFiles = (manifest: Manifest): ReadonlyArray<string> => [
     ),
   ),
 ];
+
+/** Windows file names ignore case, so two extras that differ only by case would share one file. */
+export const extraFilesCollide = (manifest: Manifest): boolean => {
+  const names = extraFiles(manifest).map((name) => name.toLowerCase());
+  return new Set(names).size !== names.length;
+};
 
 export const accessLines = (access: Access): ReadonlyArray<string> => [
   ...(access.backend ? ["Runs a program outside T3 Code's window"] : []),

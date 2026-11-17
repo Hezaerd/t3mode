@@ -414,7 +414,7 @@ const pluginUpdate = Command.make(
       return;
     }
     for (const id of ids) {
-      const updated = yield* store.update(id, options.yes).pipe(
+      const updated = yield* store.update(id, options.yes ? "any" : undefined).pipe(
         Effect.catch((error) =>
           Effect.gen(function* () {
             if (!error.approval) return yield* error;
