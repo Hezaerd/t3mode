@@ -1,3 +1,11 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodePath from "node:path";
+
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import * as NodePathLayer from "@effect/platform-node/NodePath";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -6,6 +14,7 @@ import {
   editClaudeConfig,
   editCodexConfig,
   stopProcessesScript,
+  sync,
 } from "./ToolServers.ts";
 
 const target = {
@@ -62,6 +71,22 @@ describe("editCodexConfig", () => {
       "",
     ].join("\n");
     expect(editCodexConfig(text, target, []).text).toBe("[a]\n\n[b]\n");
+  });
+
+  it("refuses a file that sets mcp_servers as an inline table, which no header may extend", () => {
+    for (const text of [
+      "mcp_servers = { linear = { command = 1 } }",
+      'model = "x"\n mcp_servers={}\n[projects.a]\n',
+    ]) {
+      expect(editCodexConfig(text, target, [server]), text).toMatchObject({
+        text: undefined,
+        refused: expect.stringContaining("inline"),
+      });
+    }
+    // A table named mcp_servers inside another table is something else.
+    expect(editCodexConfig("[profiles.a]\nmcp_servers = {}\n", target, [server]).text).toContain(
+      "[mcp_servers.t3mode-computer-use]",
+    );
   });
 
   it("keeps a comment the user wrote after its table", () => {
@@ -145,7 +170,7 @@ describe("editClaudeConfig", () => {
   );
 
   it("adds an entry, then removes it, giving the file back", () => {
-    const added = editClaudeConfig(`${user}\n`, target, [server])!;
+    const added = editClaudeConfig(`${user}\n`, target, [server]);
     const config = JSON.parse(added.text!);
     expect(Object.keys(config)).toEqual(["numStartups", "mcpServers", "projects"]);
     expect(config.mcpServers["t3mode-computer-use"]).toEqual({
@@ -154,30 +179,33 @@ describe("editClaudeConfig", () => {
       args: [server.script],
       env: { ELECTRON_RUN_AS_NODE: "1", T3MODE_HOME: target.home },
     });
-    expect(editClaudeConfig(added.text!, target, [server])!.text).toBeUndefined();
-    const back = editClaudeConfig(added.text!, target, [])!;
+    expect(editClaudeConfig(added.text!, target, [server]).text).toBeUndefined();
+    const back = editClaudeConfig(added.text!, target, []);
     expect(back.text).toBe(`${user}\n`);
     expect(back.removed).toEqual(["computer-use"]);
   });
 
   it("creates mcpServers only when there is something to add", () => {
-    expect(editClaudeConfig('{"a":1}', target, [])!.text).toBeUndefined();
-    expect(JSON.parse(editClaudeConfig('{"a":1}', target, [server])!.text!).a).toBe(1);
+    expect(editClaudeConfig('{"a":1}', target, []).text).toBeUndefined();
+    expect(JSON.parse(editClaudeConfig('{"a":1}', target, [server]).text!).a).toBe(1);
   });
 
   it("leaves another home's entry and the user's own alone", () => {
-    const sandbox = editClaudeConfig(user, other, [server])!.text!;
+    const sandbox = editClaudeConfig(user, other, [server]).text!;
     expect(editClaudeConfig(sandbox, target, [server])).toEqual({
       text: undefined,
       removed: [],
       conflicts: ["computer-use"],
     });
-    expect(editClaudeConfig(sandbox, target, [])!.text).toBeUndefined();
+    expect(editClaudeConfig(sandbox, target, []).text).toBeUndefined();
   });
 
   it("refuses text that isn't a JSON object", () => {
     for (const text of ["", "{ not json", "[]", '{"mcpServers": []}']) {
-      expect(editClaudeConfig(text, target, [server]), text).toBeUndefined();
+      expect(editClaudeConfig(text, target, [server]), text).toMatchObject({
+        text: undefined,
+        refused: expect.stringContaining("JSON"),
+      });
     }
   });
 });
@@ -211,5 +239,61 @@ describe("configPaths", () => {
         codex: "D:\\x\\config.toml",
       },
     );
+  });
+});
+
+// Claude rewrites .claude.json while it runs. `writes` simulates that many writes, each landing
+// between t3mode's read and its rename.
+const run = (writes: number) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const real = yield* FileSystem.FileSystem;
+      const dir = yield* real.makeTempDirectoryScoped({ prefix: "t3mode-sync-" });
+      const claude = NodePath.join(dir, ".claude.json");
+      yield* real.writeFileString(claude, '{"numStartups":0}');
+      let reads = 0;
+      let written = 0;
+      const racing = FileSystem.FileSystem.of({
+        ...real,
+        readFileString: (file, encoding) =>
+          Effect.gen(function* () {
+            const text = yield* real.readFileString(file, encoding);
+            if (file !== claude || reads++ % 2 === 0 || written >= writes) return text;
+            written++;
+            const next = JSON.stringify({ numStartups: written });
+            yield* real.writeFileString(claude, next);
+            return next;
+          }),
+      });
+      const result = yield* sync({
+        target,
+        paths: { claude, codex: NodePath.join(dir, "no-codex", "config.toml") },
+        pluginsFolder: dir,
+        servers: [server],
+      }).pipe(Effect.provideService(FileSystem.FileSystem, racing));
+      const config = JSON.parse(yield* real.readFileString(claude));
+      return { result, config, files: yield* real.readDirectory(dir) };
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.mergeAll(NodeFileSystem.layer, NodePathLayer.layer)),
+    ),
+  );
+
+describe("sync", () => {
+  it("starts the edit over when the file changed before the rename, keeping that change", async () => {
+    const { result, config, files } = await run(2);
+    expect(result.failures).toEqual([]);
+    expect(config.numStartups).toBe(2);
+    expect(Object.keys(config.mcpServers)).toEqual(["t3mode-computer-use"]);
+    expect(files.filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("gives up and reports it when the file keeps changing", async () => {
+    const { result, config, files } = await run(10);
+    expect(result.failures).toEqual([
+      expect.objectContaining({ message: expect.stringContaining("kept changing") }),
+    ]);
+    expect(config.mcpServers).toBeUndefined();
+    expect(files.filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 });

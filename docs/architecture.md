@@ -95,6 +95,8 @@ Everything here runs **synchronously** (`Effect.runSync` over sync file access),
 
    Safe mode still runs the updater (step 5), so an update during safe mode doesn't silently uninstall t3mode.
 
+   Safe mode leaves plugin tool servers registered (see Plugins). Claude and Codex start them as their own processes, so they can't stop T3 Code from booting, and safe mode protects only that boot.
+
 2. **Settings and state.** JSON files written atomically (write a temp file, then rename), decoded with `Schema`.
 3. **IPC.** `t3mode:*` handlers. Every handler checks that the call comes from the main frame of the main T3 Code window. The surface is small and allowlisted.
 4. **Preload registration** through `session.registerPreloadScript` on every session. The preload itself exits outside the main window.
@@ -138,7 +140,7 @@ Runs in the page, as one classic script with no imports. Plain TypeScript, no Ef
 - It shows the repo, author and version, with a warning, before it installs anything.
 - It pins each install to its version and the SHA-256 of its code.
 - It never updates a plugin without a click.
-- Safe mode starts T3 Code without any plugin.
+- Safe mode starts T3 Code without any plugin code in its window. Tool servers stay registered with Claude and Codex, because they run outside T3 Code and can't break its boot.
 
 **A plugin folder** holds a manifest, page code, and optional program files. An installed copy and a linked dev build use these names. A single-plugin release uses them too.
 
@@ -212,8 +214,9 @@ The entry runs T3 Code's own exe on the script, with `ELECTRON_RUN_AS_NODE=1`. U
 
 - **Ownership.** Each entry also sets `T3MODE_HOME` to the home's root. That variable marks the entry as this home's. t3mode rewrites and removes only its own entries, so the sandbox and the real install share these files without touching each other's entries or the user's.
 - **Taken names.** A name already used by an entry t3mode didn't write is left alone, and the plugin's tools aren't added there. The conflict is logged.
-- **Codex.** `config.toml` is edited as text, and never through `codex mcp`, which rewrites the whole file. Only whole tables named `mcp_servers.t3mode-<id>` that carry this home's marker change, with their subtables. Comments after a t3mode table belong to what follows and stay. Line endings and the final newline are kept, so adding then removing an entry gives the file back byte for byte.
+- **Codex.** `config.toml` is edited as text, and never through `codex mcp`, which rewrites the whole file. Only whole tables named `mcp_servers.t3mode-<id>` that carry this home's marker change, with their subtables. Comments after a t3mode table belong to what follows and stay. Line endings and the final newline are kept, so adding then removing an entry gives the file back byte for byte. A file that sets `mcp_servers = { ... }` inline is left alone and the refusal is logged, because TOML lets no table header extend an inline table.
 - **Claude.** `.claude.json` is written only when its content changes, through a temp file and a rename. A file that doesn't parse is left alone.
+- **Concurrent writes.** Claude and Codex rewrite their own config while they run. So each edit reads the file again just before its rename, and starts over from the new text when the file changed. After three tries it gives up, logs it, and the next reconcile tries again. The window for losing a write shrinks to that one read and rename.
 - **Missing providers.** A provider that isn't set up is skipped: no `.claude.json`, or no Codex folder.
 - **When.** Main reconciles the entries at launch, after app ready, and after every settings write. It also reconciles after every install, update and remove from the page. A run with nothing to change writes nothing and starts no process. Safe mode leaves the entries as they are. The CLI reconciles after `plugin add`, `update` and `remove`, and `uninstall` removes this home's entries.
 - **Picking up changes.** Claude starts a server for each chat. Codex keeps one per `codex.exe`. A new entry is therefore used from the next Claude chat or the next Codex process.

@@ -31,7 +31,16 @@ export interface ConfigEdit {
   readonly removed: ReadonlyArray<string>;
   /** Plugin ids whose name is taken by an entry this home doesn't own. */
   readonly conflicts: ReadonlyArray<string>;
+  /** Why the file was left alone, when t3mode can't edit it safely. */
+  readonly refused?: string;
 }
+
+const refuse = (refused: string): ConfigEdit => ({
+  text: undefined,
+  removed: [],
+  conflicts: [],
+  refused,
+});
 
 export const toolServerName = (id: string) => `${TOOL_SERVER_PREFIX}${id}`;
 
@@ -67,23 +76,24 @@ const ownsClaudeEntry = (entry: unknown, home: string) => {
 };
 
 /**
- * Edits the text of `~/.claude.json`. Returns undefined when the text isn't a JSON object: the
- * file is Claude's, and t3mode never rewrites what it can't read.
+ * Edits the text of `~/.claude.json`. Refuses text that isn't a JSON object: the file is Claude's,
+ * and t3mode never rewrites what it can't read.
  */
 export const editClaudeConfig = (
   text: string,
   target: ToolServerTarget,
   servers: ReadonlyArray<ToolServer>,
-): ConfigEdit | undefined => {
+): ConfigEdit => {
+  const notJson = refuse("it isn't a JSON object with an mcpServers object");
   let config: unknown;
   try {
     config = JSON.parse(text);
   } catch {
-    return undefined;
+    return notJson;
   }
-  if (!isRecord(config)) return undefined;
+  if (!isRecord(config)) return notJson;
   const existing = config["mcpServers"];
-  if (existing !== undefined && !isRecord(existing)) return undefined;
+  if (existing !== undefined && !isRecord(existing)) return notJson;
   const current: Record<string, unknown> = existing ?? {};
   const next: Record<string, unknown> = {};
   const removed: Array<string> = [];
@@ -208,6 +218,7 @@ export const editCodexConfig = (
   // Every name under mcp_servers, from table headers and from dotted keys, owned or not.
   const tables = new Map<string, Array<Block>>();
   const taken = new Set<string>();
+  let inline = false;
   for (const block of blocks) {
     const path = block.path ?? [];
     if (path[0] === "mcp_servers" && path.length >= 2) {
@@ -221,8 +232,11 @@ export const editCodexConfig = (
       if (!key) continue;
       const parts = [...path, ...keyParts(key[1]!)];
       if (parts[0] === "mcp_servers" && parts.length >= 2) taken.add(parts[1]!);
+      // `mcp_servers = { ... }` defines the whole table, and no header may extend it.
+      if (parts.length === 1 && parts[0] === "mcp_servers") inline = true;
     }
   }
+  if (inline) return refuse("it sets mcp_servers as an inline table");
 
   const wanted = new Map(servers.map((server) => [toolServerName(server.id), server]));
   const drop = new Set<Block>();
@@ -333,6 +347,9 @@ export const configPaths = (
  */
 export const COMMONJS_MARKER = `{ "type": "commonjs" }\n`;
 
+/** How many times a config edit starts over when the file changed under it. */
+const EDIT_ATTEMPTS = 3;
+
 export interface SyncResult {
   /** Plugin ids that lost their registration in at least one config. */
   readonly removed: ReadonlyArray<string>;
@@ -371,28 +388,47 @@ export const sync = Effect.fn("ToolServers.sync")(function* (options: {
     );
   }
 
+  // Claude and Codex rewrite their config while they run. The file is read again just before
+  // the rename, and the edit starts over from the new text when it changed in between.
   const apply = (
     config: string,
     present: Effect.Effect<boolean>,
-    edit: (text: string) => ConfigEdit | undefined,
+    edit: (text: string) => ConfigEdit,
   ) =>
     Effect.gen(function* () {
       if (!(yield* present)) return;
-      const exists = yield* fs.exists(config);
-      const text = exists ? yield* fs.readFileString(config) : "";
-      const result = edit(text);
-      if (!result) {
-        failures.push({ config, message: `${config} isn't valid JSON; t3mode left it alone.` });
+      const read = fs
+        .exists(config)
+        .pipe(
+          Effect.flatMap((exists) => (exists ? fs.readFileString(config) : Effect.succeed(""))),
+        );
+      const temp = `${config}.t3mode-${process.pid}.tmp`;
+      for (let attempt = 0; attempt < EDIT_ATTEMPTS; attempt++) {
+        const text = yield* read;
+        const result = edit(text);
+        if (result.refused !== undefined) {
+          failures.push({ config, message: `t3mode left ${config} alone: ${result.refused}.` });
+          return;
+        }
+        if (result.text !== undefined) {
+          yield* fs.writeFileString(temp, result.text);
+          if ((yield* read) !== text) {
+            yield* fs.remove(temp, { force: true });
+            continue;
+          }
+          yield* fs
+            .rename(temp, config)
+            .pipe(Effect.tapError(() => fs.remove(temp, { force: true }).pipe(Effect.ignore)));
+        }
+        for (const id of result.removed) removed.add(id);
+        for (const id of result.conflicts) conflicts.push({ config, id });
         return;
       }
-      for (const id of result.removed) removed.add(id);
-      for (const id of result.conflicts) conflicts.push({ config, id });
-      if (result.text === undefined) return;
-      const temp = `${config}.t3mode-${process.pid}.tmp`;
-      yield* fs.writeFileString(temp, result.text);
-      yield* fs
-        .rename(temp, config)
-        .pipe(Effect.tapError(() => fs.remove(temp, { force: true }).pipe(Effect.ignore)));
+      yield* fs.remove(temp, { force: true }).pipe(Effect.ignore);
+      failures.push({
+        config,
+        message: `${config} kept changing while t3mode edited it; it will try again later.`,
+      });
     }).pipe(
       Effect.catch((error) =>
         Effect.sync(() => {
