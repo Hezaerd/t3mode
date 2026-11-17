@@ -64,6 +64,17 @@ describe("editCodexConfig", () => {
     expect(editCodexConfig(text, target, []).text).toBe("[a]\n\n[b]\n");
   });
 
+  it("keeps a comment the user wrote after its table", () => {
+    const added = editCodexConfig(user, target, [server]).text!;
+    const edited = `${added}\r\n# my server\r\n[mcp_servers.mine]\r\ncommand = "x"`;
+    expect(editCodexConfig(edited, target, [server]).text).toBeUndefined();
+    expect(editCodexConfig(edited, target, []).text).toBe(
+      `${user}\r\n\r\n# my server\r\n[mcp_servers.mine]\r\ncommand = "x"`,
+    );
+    const atEnd = `${added}\r\n# keep me`;
+    expect(editCodexConfig(atEnd, target, []).text).toBe(`${user}\r\n\r\n# keep me`);
+  });
+
   it("is a no-op when the table is already right", () => {
     const added = editCodexConfig(user, target, [server]).text!;
     expect(editCodexConfig(added, target, [server])).toEqual({

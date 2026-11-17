@@ -167,10 +167,12 @@ export const codexTable = (target: ToolServerTarget, server: ToolServer): Readon
 interface Block {
   /** First line of the table, its header. Undefined for the lines before any header. */
   readonly start: number;
-  /** One past the table's last non-blank line. */
+  /** One past the table's last line that is neither blank nor a comment. */
   readonly end: number;
   readonly path: ReadonlyArray<string> | undefined;
 }
+
+const isComment = (line: string) => line.trimStart().startsWith("#");
 
 const blocksOf = (lines: ReadonlyArray<string>): ReadonlyArray<Block> => {
   const blocks: Array<Block> = [];
@@ -178,7 +180,7 @@ const blocksOf = (lines: ReadonlyArray<string>): ReadonlyArray<Block> => {
   let path: ReadonlyArray<string> | undefined;
   const close = (stop: number) => {
     let end = stop;
-    while (end > start && lines[end - 1]!.trim() === "") end--;
+    while (end > start && (lines[end - 1]!.trim() === "" || isComment(lines[end - 1]!))) end--;
     blocks.push({ start, end, path });
   };
   lines.forEach((line, index) => {
@@ -255,15 +257,21 @@ export const editCodexConfig = (
   }
   if (drop.size === 0 && added.length === 0) return { text: undefined, removed, conflicts };
 
-  // A dropped table goes with the blank lines after it. At the end of the file it also takes the
-  // blank line before it, which t3mode added, so adding then removing gives the file back.
+  // A dropped table goes with the blank lines after it, but comments after it stay: they belong to
+  // what follows. At the end of the file it also takes the blank line before it, which t3mode
+  // added, so adding then removing gives the file back.
   const out: Array<string> = [];
   blocks.forEach((block, index) => {
-    if (drop.has(block)) return;
     const next = blocks[index + 1];
-    out.push(...lines.slice(block.start, next ? next.start : lines.length));
+    const stop = next ? next.start : lines.length;
+    if (!drop.has(block)) {
+      out.push(...lines.slice(block.start, stop));
+      return;
+    }
+    const after = lines.slice(block.end, stop);
+    if (after.some(isComment)) out.push(...after);
   });
-  if (drop.has(blocks.at(-1)!)) while (out.length > 0 && out.at(-1)!.trim() === "") out.pop();
+  while (out.length > 0 && out.at(-1)!.trim() === "" && drop.has(blocks.at(-1)!)) out.pop();
   for (const table of added) {
     while (out.length > 0 && out.at(-1)!.trim() === "") out.pop();
     if (out.length > 0) out.push("");

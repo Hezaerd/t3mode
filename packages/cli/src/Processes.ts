@@ -18,16 +18,24 @@ const powershell = (script: string, env?: Readonly<Record<string, string>>) =>
     env ? { env, extendEnv: true } : {},
   );
 
-/** How many processes run from an executable inside `dir`. */
-export const countRunningIn = Effect.fn("Processes.countRunningIn")(function* (dir: string) {
+const withSlash = (dir: string) => (dir.endsWith("\\") ? dir : `${dir}\\`);
+
+/**
+ * How many processes run from an executable inside `dir`. With `pluginsFolder`, plugin tool
+ * servers (whose command line names a file in that folder) don't count.
+ */
+export const countRunningIn = Effect.fn("Processes.countRunningIn")(function* (
+  dir: string,
+  pluginsFolder?: string,
+) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const prefix = dir.endsWith("\\") ? dir : `${dir}\\`;
+  const prefix = quote(withSlash(dir));
+  const script =
+    pluginsFolder === undefined
+      ? `@(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith(${prefix}, [StringComparison]::OrdinalIgnoreCase) }).Count`
+      : `@(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith(${prefix}, [StringComparison]::OrdinalIgnoreCase) -and -not ($_.CommandLine -and $_.CommandLine.IndexOf(${quote(withSlash(pluginsFolder))}, [StringComparison]::OrdinalIgnoreCase) -ge 0) }).Count`;
   const output = yield* spawner
-    .string(
-      powershell(
-        `@(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith(${quote(prefix)}, [StringComparison]::OrdinalIgnoreCase) }).Count`,
-      ),
-    )
+    .string(powershell(script))
     .pipe(
       Effect.mapError(
         (cause) => new CliFailure({ message: "Could not list running processes.", cause }),
@@ -60,25 +68,27 @@ export const stopPluginProcesses = Effect.fn("Processes.stopPluginProcesses")(fu
 
 /**
  * Fails while T3 Code runs from `dir`, or waits for it to close when `wait` is set. With
- * `plugins`, it first stops the plugin tool servers running T3 Code's exe, which would count.
+ * `plugins`, plugin tool servers running T3 Code's exe don't count as T3 Code, and they are
+ * stopped once T3 Code itself is closed, so the command can replace its files.
  */
 export const ensureClosed = Effect.fn("Processes.ensureClosed")(function* (
   dir: string,
   wait: boolean,
   plugins?: { readonly exe: string; readonly folder: string },
 ) {
-  if (plugins) yield* stopPluginProcesses(plugins.exe, [plugins.folder]);
-  const running = yield* countRunningIn(dir);
-  if (running === 0) return;
-  if (!wait) {
+  const running = yield* countRunningIn(dir, plugins?.folder);
+  if (running > 0 && !wait) {
     return yield* new CliFailure({
       message: `T3 Code is running from ${dir}. Close it, or pass --wait to wait until it closes.`,
     });
   }
-  yield* Console.log("Waiting for T3 Code to close…");
-  yield* countRunningIn(dir).pipe(
-    Effect.repeat({ schedule: Schedule.spaced("2 seconds"), until: (count) => count === 0 }),
-  );
+  if (running > 0) {
+    yield* Console.log("Waiting for T3 Code to close…");
+    yield* countRunningIn(dir, plugins?.folder).pipe(
+      Effect.repeat({ schedule: Schedule.spaced("2 seconds"), until: (count) => count === 0 }),
+    );
+  }
+  if (plugins) yield* stopPluginProcesses(plugins.exe, [plugins.folder]);
 });
 
 /** Starts `exe` detached from this CLI, so it keeps running after the command exits. */
