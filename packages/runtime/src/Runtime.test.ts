@@ -182,3 +182,42 @@ it("carries backend messages for the plugin's own id and drops its listeners whe
   expect(await api?.backend?.send("late")).toBe(false);
   expect(backend).not.toHaveBeenCalled();
 });
+
+it("shares plugin update checks and only caches successful checks", async () => {
+  vi.stubGlobal("window", {});
+  let now = 0;
+  vi.stubGlobal("performance", { now: () => now });
+  const pending = Promise.withResolvers<unknown>();
+  const checkUpdates = vi
+    .fn()
+    .mockReturnValueOnce(pending.promise)
+    .mockResolvedValue({ ok: true, value: [] });
+  const runtime = new Runtime(
+    {
+      plugins: { checkUpdates, list: vi.fn().mockResolvedValue([]) },
+      log: vi.fn().mockResolvedValue(undefined),
+    } as unknown as NativeBridge,
+    [],
+    { version: 1, plugins: {} },
+    { t3modeVersion: "1", t3codeVersion: "1", home: "home", logs: "logs", safeMode: false },
+    { data: {}, unreadable: [] },
+  );
+  const first = runtime.checkUpdatesIfStale(30 * 60 * 1000);
+  const second = runtime.checkUpdatesIfStale(30 * 60 * 1000);
+  const manual = runtime.checkUpdates();
+  expect(checkUpdates).toHaveBeenCalledTimes(1);
+  pending.resolve({ ok: false, error: "Offline" });
+  await Promise.all([first, second, manual]);
+  await runtime.checkUpdatesIfStale(30 * 60 * 1000);
+  expect(checkUpdates).toHaveBeenCalledTimes(2);
+  await runtime.checkUpdatesIfStale(30 * 60 * 1000);
+  expect(checkUpdates).toHaveBeenCalledTimes(2);
+  now += 20 * 60 * 1000;
+  await runtime.checkUpdates();
+  now += 20 * 60 * 1000;
+  await runtime.checkUpdatesIfStale(30 * 60 * 1000);
+  expect(checkUpdates).toHaveBeenCalledTimes(3);
+  now += 11 * 60 * 1000;
+  await runtime.checkUpdatesIfStale(30 * 60 * 1000);
+  expect(checkUpdates).toHaveBeenCalledTimes(4);
+});
