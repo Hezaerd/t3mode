@@ -176,6 +176,52 @@ export const definePlugin = <const O extends OptionsSpec>(
   definition: PluginDefinition<O>,
 ): PluginDefinition<O> => definition;
 
+/** What the desktop indicator shows. t3mode draws it from its own template: no plugin code runs in it. */
+export interface IndicatorModel {
+  /** Such as "Claude · Book a flight". Capped at 160 characters, ellipsised. */
+  readonly label: string;
+  /** Such as "wait 500 ms". Capped at 160 characters. */
+  readonly detail: string | null;
+}
+
+/** A rectangle in physical desktop pixels, the space input coordinates use. */
+export interface ScreenRect {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/** One shown indicator. t3mode keeps proving it is painted; the plugin only reads the result. */
+export interface DrivingIndicator {
+  /**
+   * Aborts once. `reason.message` is "stop" when the user pressed its Stop button, and
+   * "unavailable" when it was lost or its proof expired. Never aborts on close().
+   */
+  readonly signal: AbortSignal;
+  /** True while not closed, not aborted, and painted in the last 3 seconds. */
+  readonly live: () => boolean;
+  /** The whole window, from the first proof. Fixed for the handle's life: a move revokes it. */
+  readonly rect: ScreenRect;
+  /** Changes the detail line. Does not renew presence. */
+  readonly setDetail: (detail: string | null) => void;
+  /**
+   * Idempotent. live() is false at once, then t3mode destroys the window. A pill stopped by the
+   * user shows "Stopping…" until this is called.
+   */
+  readonly close: () => void;
+}
+
+/** A pill with a Stop button above every app, for a backend that drives the desktop. */
+export interface BackendIndicator {
+  /**
+   * Shows the pill. Resolves on its first paint proof. Rejects after 3000 ms without one, when
+   * the user stops it first, when no T3 Code window is open, or while a shown handle is not
+   * closed yet. A handle lost as "unavailable" closes itself.
+   */
+  readonly show: (model: IndicatorModel) => Promise<DrivingIndicator>;
+}
+
 /** What a backend's `start` gets. Added in SDK 1.4.0. */
 export interface BackendApi {
   /** The id from the plugin's manifest.json. */
@@ -191,6 +237,8 @@ export interface BackendApi {
   readonly onMessage: (callback: (data: unknown) => void) => void;
   /** A line in `<home>/logs/plugins/<id>.log`, where the backend's stdout and stderr go too. */
   readonly log: (level: LogLevel, message: string) => void;
+  /** The desktop indicator. Added in SDK 1.5.0, so check for it before calling. */
+  readonly indicator?: BackendIndicator;
 }
 
 export interface BackendDefinition {
