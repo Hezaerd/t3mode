@@ -335,7 +335,7 @@ describe("PluginStore", () => {
               version: "1.0.0",
               sha256: sha256(CODE),
               files: { "plugin.js": sha256(CODE) },
-              approved: { backend: false, mcp: false, sockets: [] },
+              approved: { backend: false, mcp: false },
             },
           },
         });
@@ -623,7 +623,6 @@ describe("program packaging", () => {
         yield* store.install(github("someone/program"), "my-plugin", {
           backend: true,
           mcp: true,
-          sockets: [],
         });
         const folder = path.join(home.plugins, "my-plugin");
         const installed = JSON.parse(yield* fs.readFileString(home.pluginsLock)).plugins[
@@ -632,7 +631,7 @@ describe("program packaging", () => {
         expect(installed).toMatchObject({
           backend: "backend.cjs",
           mcp: "mcp.js",
-          approved: { backend: true, mcp: true, sockets: [] },
+          approved: { backend: true, mcp: true },
         });
         expect(Object.keys(installed.files).toSorted()).toEqual([
           "backend.cjs",
@@ -648,19 +647,12 @@ describe("program packaging", () => {
             typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes,
           );
         }
-        const before = yield* fs.readFileString(home.pluginsLock);
+        // A release whose manifest still declares `sockets` decodes, and asks for nothing.
         publish("someone/program", {
           manifest: manifest({ version: "1.1.0", sockets: ["new-*"] }),
           code: CODE,
         });
-        const refused = yield* store.update("my-plugin").pipe(Effect.flip);
-        expect(refused.approval?.sockets).toEqual(["new-*"]);
-        expect(yield* fs.readFileString(home.pluginsLock)).toBe(before);
-        const changed = yield* store
-          .update("my-plugin", { backend: false, mcp: false, sockets: [] })
-          .pipe(Effect.flip);
-        expect(changed.approval?.sockets).toEqual(["new-*"]);
-        yield* store.update("my-plugin", refused.approval ?? NO_ACCESS);
+        expect((yield* store.update("my-plugin")).version).toBe("1.1.0");
 
         expect(yield* fs.readDirectory(folder)).toEqual(
           expect.arrayContaining(["plugin.js", "manifest.json"]),
@@ -680,10 +672,9 @@ describe("program packaging", () => {
           .install(github("someone/program"), "my-plugin", {
             backend: false,
             mcp: false,
-            sockets: [],
           })
           .pipe(Effect.flip);
-        expect(refused.approval).toEqual({ backend: true, mcp: false, sockets: [] });
+        expect(refused.approval).toEqual({ backend: true, mcp: false });
         expect(yield* fs.exists(home.pluginsLock)).toBe(false);
         yield* store.install(github("someone/program"), "my-plugin", refused.approval ?? NO_ACCESS);
         expect(
@@ -704,7 +695,6 @@ describe("program packaging", () => {
         yield* store.install(github("someone/program"), "my-plugin", {
           backend: true,
           mcp: true,
-          sockets: [],
         });
         yield* store.remove("my-plugin");
         expect(yield* fs.exists(path.join(home.plugins, "my-plugin"))).toBe(false);
@@ -721,7 +711,7 @@ describe("program packaging", () => {
       ({ store, fs, path, home }) =>
         Effect.gen(function* () {
           lockfile = home.pluginsLock;
-          const access = { backend: false, mcp: true, sockets: [] };
+          const access = { backend: false, mcp: true };
           program("1.0.0");
           yield* store.install(github("someone/program"), "my-plugin", access);
           expect(calls).toEqual([]);
@@ -803,7 +793,6 @@ describe("program packaging", () => {
             store.install(github("someone/program"), "my-plugin", {
               backend: true,
               mcp: false,
-              sockets: [],
             }),
           ),
         ).toContain("larger than 20 MB");
@@ -818,7 +807,6 @@ describe("program packaging", () => {
         yield* store.install(github("someone/program"), "my-plugin", {
           backend: false,
           mcp: false,
-          sockets: ["old-*"],
         });
         yield* fs.writeFileString(
           home.pluginsLock,
@@ -844,15 +832,11 @@ describe("program packaging", () => {
         yield* store.link(folder);
         const entries = JSON.parse(yield* fs.readFileString(home.pluginsLock)).plugins;
         expect(entries["my-plugin"].files).toEqual({ "plugin.js": sha256(CODE) });
-        expect(entries["my-plugin"].approved).toEqual({
-          backend: false,
-          mcp: false,
-          sockets: ["old-*"],
-        });
+        expect(entries["my-plugin"].approved).toEqual({ backend: false, mcp: false });
         expect(entries.local).toMatchObject({
           backend: "backend.cjs",
           mcp: "mcp.js",
-          approved: { backend: true, mcp: true, sockets: [] },
+          approved: { backend: true, mcp: true },
         });
         expect(entries.local.files).toBeUndefined();
 
@@ -910,12 +894,32 @@ describe("program packaging", () => {
     expect(accessGrew(none, none)).toBe(false);
     expect(accessGrew(none, declaredAccess({ backend: "b.js" }))).toBe(true);
     expect(accessGrew(none, declaredAccess({ mcp: "m.js" }))).toBe(true);
-    expect(
-      accessGrew({ ...none, sockets: ["foo-*"] }, { ...none, sockets: ["foo-bar", "foo-narrow*"] }),
-    ).toBe(false);
-    expect(accessGrew({ ...none, sockets: ["foo-bar"] }, { ...none, sockets: ["foo-*"] })).toBe(
-      true,
+    expect(accessGrew(declaredAccess({ mcp: "m.js" }), declaredAccess({ mcp: "m.js" }))).toBe(
+      false,
     );
-    expect(accessGrew({ ...none, sockets: ["foo-*"] }, { ...none, sockets: ["other"] })).toBe(true);
   });
+
+  it("loads a lockfile entry that still approves sockets, and drops them on the next write", () =>
+    withStore(({ store, fs, home }) =>
+      Effect.gen(function* () {
+        publish("someone/program", { manifest: manifest({ sockets: ["old-*"] }), code: CODE });
+        yield* store.install(github("someone/program"), "my-plugin", NO_ACCESS);
+        const lock = JSON.parse(yield* fs.readFileString(home.pluginsLock));
+        lock.plugins["my-plugin"].approved = { backend: false, mcp: false, sockets: ["old-*"] };
+        yield* fs.writeFileString(home.pluginsLock, JSON.stringify(lock));
+
+        const [listed] = yield* store.list;
+        expect(listed?.error).toBeUndefined();
+        expect(listed).not.toHaveProperty("sockets");
+        expect((yield* store.scripts).map((script) => script.name)).toContain(
+          "t3mode-plugin/my-plugin.js",
+        );
+
+        publish("someone/program", { manifest: manifest({ version: "1.1.0" }), code: CODE });
+        yield* store.update("my-plugin");
+        expect(
+          JSON.parse(yield* fs.readFileString(home.pluginsLock)).plugins["my-plugin"].approved,
+        ).toEqual({ backend: false, mcp: false });
+      }),
+    ));
 });

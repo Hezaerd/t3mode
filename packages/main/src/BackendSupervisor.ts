@@ -264,6 +264,8 @@ export const makeSupervisor = Effect.fnUntraced(function* (options: SupervisorOp
     });
     child.onExit((code) => {
       log.write(`exited with code ${code}`);
+      // Main may be quitting, and then no later turn runs to write it.
+      log.flush();
       closeOne();
       exited.resolve();
       if (slot.running !== running) return;

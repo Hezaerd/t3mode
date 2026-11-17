@@ -13,7 +13,6 @@ import { Disks } from "./Disks.ts";
 import { withElectronFetch } from "./ElectronFetch.ts";
 import { Home } from "./Home.ts";
 import { PluginDataStore } from "./PluginDataStore.ts";
-import { LocalSockets } from "./LocalSockets.ts";
 import { PluginHost } from "./PluginHost.ts";
 import { SettingsStore } from "./SettingsStore.ts";
 import { ShortcutActionSchema, T3Keybindings } from "./T3Keybindings.ts";
@@ -82,7 +81,6 @@ export const register = Effect.fn("Ipc.register")(function* (options: {
   readonly safeMode: boolean;
 }) {
   const plugins = yield* PluginHost;
-  const sockets = yield* LocalSockets;
   const guard = yield* BootGuard;
   const settings = yield* SettingsStore;
   const pluginData = yield* PluginDataStore;
@@ -120,7 +118,6 @@ export const register = Effect.fn("Ipc.register")(function* (options: {
     );
 
   yield* Effect.sync(() => {
-    handle(Channel.socket, (args, event) => sockets.act(args[0], event.sender));
     handle(Channel.pageScripts, () => plugins.pageScripts);
     handle(Channel.pluginScript, (args) => plugins.pluginScript(args[0]));
     handle(Channel.plugins, (args) =>

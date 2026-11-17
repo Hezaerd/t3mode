@@ -11,7 +11,6 @@ import {
   type LogLevel,
   type NativeBridge,
   type PluginAction,
-  type SocketEvent,
   isMainWindowUrl,
 } from "@t3mode/shared/Ipc";
 import type { Access, GithubSource, PageScript, PluginDataSnapshot } from "@t3mode/shared/Plugins";
@@ -58,15 +57,6 @@ const start = (): void => {
   scope[GUARD] = true;
 
   const bridge: NativeBridge = {
-    socket: {
-      connect: (plugin, name) =>
-        ipcRenderer.invoke(Channel.socket, { _tag: "connect", plugin, name }),
-      write: (id, data) => ipcRenderer.invoke(Channel.socket, { _tag: "write", id, data }),
-      close: (id) => ipcRenderer.invoke(Channel.socket, { _tag: "close", id }),
-    },
-    onSocketEvent: (listener) => {
-      ipcRenderer.on(Channel.socketEvent, (_event, event: SocketEvent) => listener(event));
-    },
     log: (level: LogLevel, message: string) => ipcRenderer.invoke(Channel.log, level, message),
     ready: () => ipcRenderer.invoke(Channel.ready),
     info: () => ipcRenderer.invoke(Channel.info) as Promise<Info>,

@@ -34,36 +34,27 @@ export const isPluginFile = (name: string): boolean =>
 export const isPluginScript = (name: string): boolean =>
   isPluginFile(name) && /\.(?:js|cjs)$/.test(name);
 
+/**
+ * What a plugin may do beyond its page code. Older lockfiles also record `sockets` here, from the
+ * page socket transport t3mode no longer has; decoding drops it.
+ */
 export interface Access {
   readonly backend: boolean;
   readonly mcp: boolean;
-  readonly sockets: ReadonlyArray<string>;
 }
 
-export const NO_ACCESS: Access = { backend: false, mcp: false, sockets: [] };
+export const NO_ACCESS: Access = { backend: false, mcp: false };
 
 /** The access a user approved, or "any" for `plugin update --yes`. */
 export type Approval = Access | "any";
 
-export const declaredAccess = (
-  manifest: Pick<Manifest, "backend" | "mcp" | "sockets">,
-): Access => ({
+export const declaredAccess = (manifest: Pick<Manifest, "backend" | "mcp">): Access => ({
   backend: manifest.backend !== undefined,
   mcp: manifest.mcp !== undefined,
-  sockets: manifest.sockets ?? [],
 });
 
 export const accessGrew = (approved: Access, next: Access): boolean =>
-  (next.backend && !approved.backend) ||
-  (next.mcp && !approved.mcp) ||
-  next.sockets.some(
-    (pattern) =>
-      !approved.sockets.some(
-        (allowed) =>
-          allowed === pattern ||
-          (allowed.endsWith("*") && pattern.startsWith(allowed.slice(0, -1))),
-      ),
-  );
+  (next.backend && !approved.backend) || (next.mcp && !approved.mcp);
 
 export const extraFiles = (manifest: Manifest): ReadonlyArray<string> => [
   ...new Set(
@@ -82,7 +73,6 @@ export const extraFilesCollide = (manifest: Manifest): boolean => {
 export const accessLines = (access: Access): ReadonlyArray<string> => [
   ...(access.backend ? ["Runs a program outside T3 Code's window"] : []),
   ...(access.mcp ? ["Adds tools to your agents"] : []),
-  ...(access.sockets.length ? [`Can connect to local sockets: ${access.sockets.join(", ")}`] : []),
 ];
 
 export interface Manifest {
@@ -96,7 +86,6 @@ export interface Manifest {
   readonly backend?: string;
   readonly mcp?: string;
   readonly files?: ReadonlyArray<string>;
-  readonly sockets?: ReadonlyArray<string>;
 }
 
 export interface GithubSource {
@@ -133,25 +122,12 @@ export interface Lockfile {
 export const lockEntry = (lock: Lockfile, id: string): LockEntry | undefined =>
   Object.hasOwn(lock.plugins, id) ? lock.plugins[id] : undefined;
 
-// A leading letter or digit keeps names like ".." from walking out of \\.\pipe\.
-export const SOCKET_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
-export const SOCKET_ALLOW_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\*?$/;
-
-export const socketAllowed = (patterns: ReadonlyArray<string>, name: string): boolean =>
-  SOCKET_NAME_PATTERN.test(name) &&
-  patterns.some(
-    (pattern) =>
-      SOCKET_ALLOW_PATTERN.test(pattern) &&
-      (pattern.endsWith("*") ? name.startsWith(pattern.slice(0, -1)) : name === pattern),
-  );
-
 export interface InstalledPlugin {
   readonly id: string;
   readonly name: string;
   readonly description: string;
   readonly version: string;
   readonly author?: string;
-  readonly sockets?: ReadonlyArray<string>;
   readonly source: PluginSource;
   readonly sha256?: string;
   readonly error?: string;
