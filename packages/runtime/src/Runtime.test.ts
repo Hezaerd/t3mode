@@ -1,11 +1,18 @@
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import type { LocalSocket, PluginApi } from "@t3mode/plugin-sdk";
+import type { BackendEvent } from "@t3mode/shared/Backends";
 import type { NativeBridge, SocketEvent } from "@t3mode/shared/Ipc";
 import { Runtime } from "./Runtime.ts";
 
 vi.mock("./ui/toast.ts", () => ({ toast: vi.fn() }));
 
 afterEach(() => vi.unstubAllGlobals());
+
+/** The backend half of the bridge, for tests that don't use it. */
+const noBackends = {
+  backend: vi.fn().mockResolvedValue(true),
+  onBackendEvent: () => undefined,
+};
 
 it("finishes writes from running plugins and cleanup before removing their data", async () => {
   const first = Promise.withResolvers<void>();
@@ -31,6 +38,7 @@ it("finishes writes from running plugins and cleanup before removing their data"
   });
   const runtime = new Runtime(
     {
+      ...noBackends,
       writePluginData: write,
       plugins: { remove },
       log: vi.fn().mockResolvedValue(undefined),
@@ -80,6 +88,7 @@ it("shows a plugin's settings panel while it runs and stops a panel that throws"
   });
   const runtime = new Runtime(
     {
+      ...noBackends,
       writeSettings: vi.fn().mockResolvedValue(undefined),
       log: vi.fn().mockResolvedValue(undefined),
     } as unknown as NativeBridge,
@@ -125,6 +134,7 @@ it("closes sockets when stopped and rejects a connect that finishes after stop",
     ],
   });
   const native = {
+    ...noBackends,
     socket: {
       connect: vi
         .fn()
@@ -181,6 +191,7 @@ it("hands bytes that arrived before onData to the first data listener", async ()
     ],
   });
   const native = {
+    ...noBackends,
     socket: { connect: () => reply.promise, close: vi.fn().mockResolvedValue(undefined) },
     onSocketEvent: (listener: (event: SocketEvent) => void) => {
       emit = listener;
@@ -212,4 +223,71 @@ it("hands bytes that arrived before onData to the first data listener", async ()
   socket.onData((data) => received.push(...data));
   emit?.({ _tag: "data", id: 7, data: new Uint8Array([3]) });
   expect(received).toEqual([1, 2, 3]);
+});
+
+it("carries backend messages for the plugin's own id and drops its listeners when it stops", async () => {
+  let deliver: ((event: BackendEvent) => void) | undefined;
+  const backend = vi.fn().mockResolvedValue(true);
+  const messages: Array<unknown> = [];
+  const statuses: Array<unknown> = [];
+  let api: PluginApi | undefined;
+  vi.stubGlobal("window", {
+    __t3modePlugins: [
+      {
+        id: "example",
+        load: () => ({
+          options: {},
+          start: (started: PluginApi) => {
+            api = started;
+            started.backend?.onMessage((data) => messages.push(data));
+            started.backend?.onStatus((status) => statuses.push(status));
+          },
+        }),
+      },
+    ],
+  });
+  const runtime = new Runtime(
+    {
+      backend,
+      onBackendEvent: (listener: (event: BackendEvent) => void) => {
+        deliver = listener;
+      },
+      writeSettings: vi.fn().mockResolvedValue(undefined),
+      log: vi.fn().mockResolvedValue(undefined),
+    } as unknown as NativeBridge,
+    [
+      {
+        id: "example",
+        name: "Example",
+        description: "",
+        version: "1.0.0",
+        source: { kind: "github", owner: "o", repo: "r" },
+      },
+    ],
+    { version: 1, plugins: {} },
+    { t3modeVersion: "0", t3codeVersion: "0", home: "C:\\home", logs: "", safeMode: false },
+    { data: {}, unreadable: [] },
+  );
+  deliver?.({ _tag: "status", plugin: "example", status: { state: "starting" } });
+  expect(deliver).toBeUndefined();
+  await runtime.followBackends();
+  expect(backend).toHaveBeenCalledWith({ _tag: "subscribe" });
+  deliver?.({ _tag: "status", plugin: "example", status: { state: "starting" } });
+  runtime.startAll();
+
+  expect(await api?.backend?.send({ ping: 1 })).toBe(true);
+  expect(backend).toHaveBeenLastCalledWith({ _tag: "send", plugin: "example", data: { ping: 1 } });
+  deliver?.({ _tag: "message", plugin: "example", data: "pong" });
+  deliver?.({ _tag: "message", plugin: "other", data: "not mine" });
+  deliver?.({ _tag: "status", plugin: "example", status: { state: "running" } });
+  expect(messages).toEqual(["pong"]);
+  expect(statuses).toEqual([{ state: "starting" }, { state: "running" }]);
+  expect(runtime.backendStatus("example")).toEqual({ state: "running" });
+
+  await runtime.setEnabled("example", false);
+  deliver?.({ _tag: "message", plugin: "example", data: "after stop" });
+  expect(messages).toEqual(["pong"]);
+  backend.mockClear();
+  expect(await api?.backend?.send("late")).toBe(false);
+  expect(backend).not.toHaveBeenCalled();
 });

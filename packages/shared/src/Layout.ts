@@ -56,6 +56,10 @@ export interface HomeLayout {
   readonly shimJs: string;
   /** PowerShell script that installs a downloaded update after T3 Code quits. */
   readonly updateHelper: string;
+  /** Runs one plugin's backend in a utility process. */
+  readonly backendHost: string;
+  /** One log file per plugin backend, `<id>.log`. */
+  readonly pluginLogs: string;
   /** Downloaded installers, one folder per version. */
   readonly updates: string;
   /** The verified installer waiting to be installed. */
@@ -102,6 +106,8 @@ export const homeLayout = (root: string): HomeLayout => {
     repairJs: NodePath.join(dist, "repair.cjs"),
     shimJs: NodePath.join(dist, "shim.cjs"),
     updateHelper: NodePath.join(dist, "update-helper.ps1"),
+    backendHost: NodePath.join(dist, "backend-host.cjs"),
+    pluginLogs: NodePath.join(logs, "plugins"),
     updates: NodePath.join(root, "updates"),
     updateReady: NodePath.join(root, "updates", "ready.json"),
     updateLog: NodePath.join(logs, "update.log"),

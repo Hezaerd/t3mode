@@ -1,5 +1,6 @@
 // The contract between t3mode and a plugin. A plugin's bundle default-exports
-// `definePlugin({ options, start })`; its id, name and version live in its manifest.json.
+// `definePlugin({ options, start })`; its id, name and version live in its manifest.json. A
+// plugin's backend script exports `defineBackend({ start })`.
 // Changing anything here in a way that breaks plugins means a new PLUGIN_API_VERSION.
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -72,6 +73,33 @@ export interface Disk {
   readonly free: number;
 }
 
+/** A plugin's backend as its page code sees it. Null: no backend runs for it. */
+export type BackendStatus =
+  | { readonly state: "starting" }
+  | { readonly state: "running" }
+  /** It crashed, and restarts at `retryAt` (milliseconds since the epoch). */
+  | {
+      readonly state: "restarting";
+      readonly crashes: number;
+      readonly error: string;
+      readonly retryAt: number;
+    }
+  /** It crashed too often in a short time, and stays down until the user retries. */
+  | { readonly state: "failed"; readonly crashes: number; readonly error: string };
+
+/** The page side of a plugin's backend: messages to and from its own process. */
+export interface PluginBackend {
+  /**
+   * Sends `data` (anything structured clone can copy) to the backend. Resolves false when no
+   * backend runs for the plugin, and the message is dropped.
+   */
+  readonly send: (data: unknown) => Promise<boolean>;
+  /** Called for every message the backend sends. */
+  readonly onMessage: (callback: (data: unknown) => void) => void;
+  /** Called now with the current status, then on every change. */
+  readonly onStatus: (callback: (status: BackendStatus | null) => void) => void;
+}
+
 export interface PluginApi<O extends OptionsSpec = OptionsSpec> {
   /** The id from the plugin's manifest.json. */
   readonly id: string;
@@ -140,6 +168,11 @@ export interface PluginApi<O extends OptionsSpec = OptionsSpec> {
    * drives are left out. Added in SDK 1.3.0, so check for it before calling.
    */
   readonly disks?: () => Promise<ReadonlyArray<Disk>>;
+  /**
+   * The plugin's backend, the program its manifest's `backend` names. Added in SDK 1.4.0, so
+   * check for it before calling.
+   */
+  readonly backend?: PluginBackend;
 }
 
 export interface PluginDefinition<O extends OptionsSpec = OptionsSpec> {
@@ -152,3 +185,31 @@ export interface PluginDefinition<O extends OptionsSpec = OptionsSpec> {
 export const definePlugin = <const O extends OptionsSpec>(
   definition: PluginDefinition<O>,
 ): PluginDefinition<O> => definition;
+
+/** What a backend's `start` gets. Added in SDK 1.4.0. */
+export interface BackendApi {
+  /** The id from the plugin's manifest.json. */
+  readonly id: string;
+  /**
+   * The backend's own folder, `<home>/plugin-data/<id>/`. It exists when `start` runs, and is
+   * deleted when the plugin is removed.
+   */
+  readonly dataDir: string;
+  /** Sends `data` (anything structured clone can copy) to the plugin's page code. */
+  readonly send: (data: unknown) => void;
+  /** Called for every message the page code sends. Messages that came before are delivered too. */
+  readonly onMessage: (callback: (data: unknown) => void) => void;
+  /** A line in `<home>/logs/plugins/<id>.log`, where the backend's stdout and stderr go too. */
+  readonly log: (level: LogLevel, message: string) => void;
+}
+
+export interface BackendDefinition {
+  /**
+   * Called once when the process starts. The backend runs until the plugin is turned off,
+   * updated or removed, or T3 Code quits; a throw, a rejected promise or an exit is a crash.
+   */
+  start(api: BackendApi): void | Promise<void>;
+}
+
+/** Returns the definition unchanged: the default export of the plugin's backend script. */
+export const defineBackend = (definition: BackendDefinition): BackendDefinition => definition;

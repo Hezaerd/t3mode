@@ -59,7 +59,17 @@ const target = Effect.gen(function* () {
   return yield* Target.resolve(yield* root);
 });
 
-const pluginsOf = (t: Target.Target) => ({ exe: t.exe, folder: t.home.plugins });
+/** T3 Code's exe and the folders plugin processes run from: `<home>/plugins` and linked folders. */
+const pluginsOf = Effect.fn("pluginsOf")(function* (t: Target.Target) {
+  const programs = yield* (yield* pluginStore).programs;
+  return {
+    exe: t.exe,
+    folders: [
+      t.home.plugins,
+      ...programs.filter((program) => program.linked).map((program) => program.folder),
+    ],
+  };
+});
 
 const wait = Flag.Boolean("wait").pipe(
   Flag.withDescription("Wait for T3 Code to close instead of failing"),
@@ -79,7 +89,7 @@ const describeApply: Record<Install.ApplyResult, string> = {
 const installOrRepair = (withDeploy: boolean) =>
   Effect.fn(function* (options: { readonly wait: boolean; readonly launch: boolean }) {
     const t = yield* target;
-    yield* Processes.ensureClosed(t.installDir, options.wait, pluginsOf(t));
+    yield* Processes.ensureClosed(t.installDir, options.wait, yield* pluginsOf(t));
     const flags = yield* root;
     if (
       Option.isNone(flags.home) &&
@@ -120,7 +130,7 @@ const uninstall = Command.make(
   Effect.fn(function* (options) {
     const t = yield* target;
     const fs = yield* FileSystem.FileSystem;
-    yield* Processes.ensureClosed(t.installDir, options.wait, pluginsOf(t));
+    yield* Processes.ensureClosed(t.installDir, options.wait, yield* pluginsOf(t));
     const result = yield* Install.removeShim(t);
     yield* Console.log(
       result === "removed" ? "Original T3 Code restored." : "t3mode was not installed.",
@@ -153,7 +163,7 @@ const status = Command.make(
     const t = yield* target;
     const fs = yield* FileSystem.FileSystem;
     const s = yield* Install.readStatus(t);
-    const running = yield* Processes.countRunningIn(t.installDir, t.home.plugins);
+    const running = yield* Processes.countRunningIn(t.installDir, (yield* pluginsOf(t)).folders);
     const deployed = yield* fs.exists(t.home.mainJs);
     const safeMode = yield* fs.exists(t.home.safeMode);
     const state = yield* fs.readFileString(t.home.state).pipe(Effect.option);
@@ -294,27 +304,50 @@ const sandbox = Command.make(
 const pluginStore = Effect.gen(function* () {
   const flags = yield* root;
   const layout = yield* Target.resolveHome(flags.home);
-  const exe = yield* Target.resolve(flags).pipe(
-    Effect.map((t) => t.exe),
-    Effect.option,
-  );
+  const t3 = yield* Target.resolve(flags).pipe(Effect.option);
+  const exe = Option.map(t3, (t) => t.exe);
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  // Set once the store exists; the stop hook below runs only after that.
+  let installedPrograms: Effect.Effect<ReadonlyArray<PluginStore.PluginProgram>> = Effect.succeed(
+    [],
+  );
   const store = yield* PluginStore.make({
     layout,
     githubBase: githubUrl(process.env),
-    ...(Option.isSome(exe)
+    ...(Option.isSome(t3)
       ? {
-          stopProcesses: (folder: string) =>
-            Processes.stopPluginProcesses(exe.value, [folder]).pipe(
-              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          // A backend runs inside T3 Code, out of this command's reach: only T3 Code can stop it
+          // while it replaces the plugin's files.
+          stopProcesses: Effect.fn("stopProcesses")(
+            function* (id: string, folder: string, backend: boolean) {
+              // Tool servers, from <home>/plugins or a linked folder, run T3 Code's exe without it.
+              const folders = [
+                layout.plugins,
+                ...(yield* installedPrograms)
+                  .filter((program) => program.linked)
+                  .map((program) => program.folder),
+              ];
+              if (backend && (yield* Processes.countRunningIn(t3.value.installDir, folders)) > 0) {
+                return yield* new PluginStore.PluginError({
+                  message: `${id} runs a backend inside T3 Code. Update or remove it from T3 Code's Plugins page, or close T3 Code first.`,
+                });
+              }
+              yield* Processes.stopPluginProcesses(t3.value.exe, [folder]);
+              return Effect.void;
+            },
+            Effect.catchTag("CliFailure", (error) =>
+              Effect.fail(new PluginStore.PluginError({ message: error.message })),
             ),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          ),
         }
       : {}),
   });
+  installedPrograms = store.programs;
   const refresh = Option.isSome(exe)
-    ? store.toolServers.pipe(
-        Effect.flatMap((servers) =>
-          ToolServers.reconcile({ exe: exe.value, home: layout }, servers),
+    ? store.programs.pipe(
+        Effect.flatMap((programs) =>
+          ToolServers.reconcile({ exe: exe.value, home: layout }, programs),
         ),
       )
     : Effect.void;
@@ -491,7 +524,9 @@ const pluginLink = Command.make(
     ),
   },
   Effect.fn(function* (options) {
-    const linked = yield* (yield* pluginStore).link(options.folder);
+    const store = yield* pluginStore;
+    const linked = yield* store.link(options.folder);
+    yield* store.refresh;
     yield* Console.log(
       linked
         .map(

@@ -715,6 +715,7 @@ describe("program packaging", () => {
   it("stops a plugin's processes before replacing or deleting its files", () => {
     const calls: Array<{ folder: string; version: string }> = [];
     let refuse = false;
+    let resumed = 0;
     let lockfile = "";
     return withStore(
       ({ store, fs, path, home }) =>
@@ -725,17 +726,24 @@ describe("program packaging", () => {
           yield* store.install(github("someone/program"), "my-plugin", access);
           expect(calls).toEqual([]);
           const folder = path.join(home.plugins, "my-plugin");
-          expect(yield* store.toolServers).toEqual([
-            { id: "my-plugin", script: path.join(folder, "mcp.cjs") },
+          expect(yield* store.programs).toEqual([
+            {
+              id: "my-plugin",
+              folder,
+              linked: false,
+              mcp: path.join(folder, "mcp.cjs"),
+              version: expect.stringContaining("mcp.cjs"),
+            },
           ]);
 
           program("1.1.0");
           yield* store.update("my-plugin", access);
           expect(calls).toEqual([{ folder, version: "1.0.0" }]);
+          expect(resumed).toBe(1);
           expect(yield* fs.readFileString(path.join(folder, "a.node"))).toBe("1.1.0");
 
           yield* fs.writeFileString(path.join(folder, "mcp.cjs"), "changed");
-          expect(yield* store.toolServers).toEqual([]);
+          expect(yield* store.programs).toEqual([]);
 
           refuse = true;
           expect(yield* failure(store.remove("my-plugin"))).toBe("still running");
@@ -743,19 +751,28 @@ describe("program packaging", () => {
           expect(JSON.parse(yield* fs.readFileString(home.pluginsLock)).plugins).toHaveProperty(
             "my-plugin",
           );
+          expect(resumed).toBe(1);
           refuse = false;
+          const dataFolder = path.join(home.pluginData, "my-plugin");
+          yield* fs.makeDirectory(dataFolder, { recursive: true });
+          yield* fs.writeFileString(path.join(dataFolder, "state.json"), "{}");
           yield* store.remove("my-plugin");
           expect(calls.at(-1)).toEqual({ folder, version: "1.1.0" });
+          expect(resumed).toBe(2);
           expect(yield* fs.exists(folder)).toBe(false);
+          expect(yield* fs.exists(dataFolder)).toBe(false);
         }),
-      (folder) =>
+      (id, folder) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const version = JSON.parse(yield* fs.readFileString(lockfile).pipe(Effect.orDie)).plugins[
-            "my-plugin"
+            id
           ].version;
           calls.push({ folder, version });
           if (refuse) return yield* new PluginStore.PluginError({ message: "still running" });
+          return Effect.sync(() => {
+            resumed++;
+          });
         }).pipe(Effect.provide(NodeFileSystem.layer)),
     );
   });
@@ -838,6 +855,21 @@ describe("program packaging", () => {
           approved: { backend: true, mcp: true, sockets: [] },
         });
         expect(entries.local.files).toBeUndefined();
+
+        // A linked plugin's programs are the scripts that exist; a rebuild changes the version.
+        expect(yield* store.programs).toEqual([]);
+        yield* fs.writeFileString(path.join(folder, "backend.cjs"), "1");
+        const [first] = yield* store.programs;
+        expect(first).toEqual({
+          id: "local",
+          folder,
+          linked: true,
+          backend: path.join(folder, "backend.cjs"),
+          version: expect.any(String),
+        });
+        yield* fs.utimes(path.join(folder, "backend.cjs"), 0, 1_000_000);
+        const [second] = yield* store.programs;
+        expect(second?.version).not.toBe(first?.version);
       }),
     ));
 

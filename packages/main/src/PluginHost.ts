@@ -14,8 +14,8 @@ import { githubUrl } from "@t3mode/shared/Layout";
 import type { InstalledPlugin, PageScript, PluginResult } from "@t3mode/shared/Plugins";
 import * as PluginStore from "@t3mode/shared/PluginStore";
 import { compareVersions } from "@t3mode/shared/Semver";
-import type { ToolServer } from "@t3mode/shared/ToolServers";
 
+import { Backends } from "./Backends.ts";
 import { Files } from "./Files.ts";
 import { Home } from "./Home.ts";
 import * as PluginProcesses from "./PluginProcesses.ts";
@@ -43,8 +43,8 @@ export class PluginHost extends Context.Service<
     readonly pageScripts: Effect.Effect<ReadonlyArray<PageScript>>;
     readonly pluginScript: (id: unknown) => Effect.Effect<PageScript | null, Schema.SchemaError>;
     readonly act: (input: unknown) => Effect.Effect<unknown, Schema.SchemaError>;
-    /** The installed plugins' tool servers whose pinned files all match. */
-    readonly toolServers: Effect.Effect<ReadonlyArray<ToolServer>>;
+    /** The installed plugins' tool servers and backends, for those that load. */
+    readonly programs: Effect.Effect<ReadonlyArray<PluginStore.PluginProgram>>;
   }
 >()("@t3mode/main/PluginHost") {}
 
@@ -67,12 +67,29 @@ export const make = Effect.gen(function* () {
   const files = yield* Files;
   const { layout } = yield* Home;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const backends = yield* Backends;
   const store = yield* PluginStore.make({
     layout,
     githubBase: githubUrl(process.env),
-    stopProcesses: (folder) =>
-      PluginProcesses.stop([folder]).pipe(
+    // The backend stays down until the reconcile after the update or remove; tool servers run
+    // again when Claude or Codex next start them.
+    stopProcesses: (id, folder) =>
+      backends.hold(id).pipe(
+        Effect.flatMap((stopped) =>
+          stopped
+            ? PluginProcesses.stop([folder])
+            : backends.release(id).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    new PluginStore.PluginError({
+                      message: `${id}'s backend didn't stop. Try again, or restart T3 Code.`,
+                    }),
+                  ),
+                ),
+              ),
+        ),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.as(backends.release(id)),
       ),
   });
   let updates: Readonly<Record<string, string>> = {};
@@ -138,7 +155,7 @@ export const make = Effect.gen(function* () {
       return (yield* store.script(id)) ?? null;
     }),
     act,
-    toolServers: store.toolServers,
+    programs: store.programs,
   });
 });
 

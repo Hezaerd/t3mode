@@ -64,7 +64,7 @@ jobs:
       - name: Check the package
         run: |
           tarball="$(ls "$RUNNER_TEMP"/cli/*.tgz)"
-          for file in t3mode.cjs repair.cjs bundles/main.cjs bundles/preload.cjs bundles/renderer.iife.js bundles/index.cjs bundles/update-helper.ps1; do
+          for file in t3mode.cjs repair.cjs bundles/main.cjs bundles/preload.cjs bundles/renderer.iife.js bundles/index.cjs bundles/update-helper.ps1 bundles/backend-host.cjs; do
             tar -tzf "$tarball" | grep -qx "package/dist/$file" || { echo "Missing dist/$file"; exit 1; }
           done
           mkdir "$RUNNER_TEMP/smoke" && cd "$RUNNER_TEMP/smoke"

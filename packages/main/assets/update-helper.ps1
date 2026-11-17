@@ -17,7 +17,8 @@ param(
   [string] $Version = "",
   [string] $Relaunch = "0",
   [string] $RelaunchArgs = "",
-  [string] $KeepUpdaterEnv = "0"
+  [string] $KeepUpdaterEnv = "0",
+  [string] $PluginFolders = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,16 +46,23 @@ function Get-T3Processes {
 
 # Plugin tool servers run T3 Code's exe, started by Claude or Codex, so they can outlive T3 Code
 # and would hold the update. Stops every process of an exe in the install folder whose command
-# line names a file under <home>\plugins\ (the same match as stopProcessesScript in
-# packages/shared/src/ToolServers.ts). Get-Process has no CommandLine in Windows PowerShell 5.1.
+# line names a file under <home>\plugins\ or a linked plugin's folder (-PluginFolders, base64
+# JSON), the same match as stopProcessesScript in packages/shared/src/ToolServers.ts.
+# Get-Process has no CommandLine in Windows PowerShell 5.1.
 function Stop-PluginProcesses {
   try {
     $prefix = $InstallDir.TrimEnd("\") + "\"
-    $plugins = (Join-Path $HomeDir "plugins").TrimEnd("\") + "\"
+    $folders = @((Join-Path $HomeDir "plugins").TrimEnd("\") + "\")
+    if ($PluginFolders) {
+      $json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($PluginFolders))
+      # Windows PowerShell emits a JSON array as one object; foreach over it gets the items.
+      foreach ($folder in (ConvertFrom-Json $json)) { $folders += ([string] $folder).TrimEnd("\") + "\" }
+    }
     $found = @(Get-CimInstance Win32_Process | Where-Object {
-        $_.ProcessId -ne $PID -and $_.ExecutablePath -and $_.CommandLine -and
-        $_.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -and
-        $_.CommandLine.IndexOf($plugins, [StringComparison]::OrdinalIgnoreCase) -ge 0
+        $p = $_
+        $p.ProcessId -ne $PID -and $p.ExecutablePath -and $p.CommandLine -and
+        $p.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -and
+        @($folders | Where-Object { $p.CommandLine.IndexOf($_, [StringComparison]::OrdinalIgnoreCase) -ge 0 }).Count -gt 0
       })
     if ($found.Count -eq 0) { return }
     foreach ($p in $found) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }

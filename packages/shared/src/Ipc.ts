@@ -1,4 +1,5 @@
 // The contract between the preload and the main process.
+import type { BackendAction, BackendEvent } from "./Backends.ts";
 import type {
   Access,
   GithubSource,
@@ -57,6 +58,10 @@ export const Channel = {
   updateChanged: "t3mode:update-changed",
   /** Page → main: size and free space of the local fixed drives. */
   disks: "t3mode:disks",
+  /** Page → main: a BackendAction (see Backends.ts). */
+  backend: "t3mode:backend",
+  /** Main → page: a BackendEvent, sent to pages that subscribed. */
+  backendEvent: "t3mode:backend-event",
 } as const;
 
 export const RENDERER_SCRIPT_NAME = "t3mode-renderer.js";
@@ -132,4 +137,8 @@ export interface NativeBridge {
   };
   readonly loadPlugin: (id: string) => Promise<void>;
   readonly disks: () => Promise<ReadonlyArray<Disk>>;
+  /** Sends a BackendAction. `send` resolves to false when no backend runs for the plugin. */
+  readonly backend: (action: BackendAction) => Promise<boolean>;
+  /** Calls `listener` with each BackendEvent. Subscribe with a `subscribe` action. */
+  readonly onBackendEvent: (listener: (event: BackendEvent) => void) => void;
 }

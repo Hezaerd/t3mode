@@ -1,7 +1,8 @@
-// Keeps Claude's and Codex's MCP config in step with the enabled plugins' tool servers (see "Tool
-// servers" in docs/architecture.md). One reconcile runs at launch, after every settings write and
-// after every install, update and remove. It never fails, and a run with nothing to change writes
-// nothing and starts no process.
+// Keeps what runs for plugins in step with the enabled plugins: their backends (see "Backends" in
+// docs/architecture.md) and their tool servers in Claude's and Codex's MCP config (see "Tool
+// servers"). One reconcile runs at launch, after every settings write, after every install,
+// update and remove, and when the page loads again. It never fails, and a run with nothing to
+// change writes nothing and starts no process.
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodePath from "node:path";
 
@@ -17,24 +18,28 @@ import { app } from "electron";
 
 import * as Shared from "@t3mode/shared/ToolServers";
 
+import { Backends } from "./Backends.ts";
 import { Home } from "./Home.ts";
+import { LinkedFolders } from "./LinkedFolders.ts";
 import * as PluginProcesses from "./PluginProcesses.ts";
 import { PluginHost } from "./PluginHost.ts";
 import { SettingsStore } from "./SettingsStore.ts";
 
-export class ToolServers extends Context.Service<
-  ToolServers,
+export class Reconcile extends Context.Service<
+  Reconcile,
   {
     /** Queues a reconcile in the background. Runs that pile up while one runs collapse into one. */
     readonly refresh: Effect.Effect<void>;
     /** The first reconcile, after app ready. */
     readonly start: Effect.Effect<void>;
   }
->()("@t3mode/main/ToolServers") {}
+>()("@t3mode/main/Reconcile") {}
 
 export const make = Effect.gen(function* () {
   const plugins = yield* PluginHost;
   const settings = yield* SettingsStore;
+  const backends = yield* Backends;
+  const linked = yield* LinkedFolders;
   const fs = yield* FileSystem.FileSystem;
   const { layout } = yield* Home;
   const lock = yield* Semaphore.make(1);
@@ -42,8 +47,31 @@ export const make = Effect.gen(function* () {
 
   const reconcile = Effect.gen(function* () {
     const current = yield* settings.read;
-    const servers = (yield* plugins.toolServers).filter(
-      (server) => current.plugins[server.id]?.enabled ?? true,
+    const all = yield* plugins.programs;
+    const enabled = all.filter((program) => current.plugins[program.id]?.enabled ?? true);
+    // A disabled plugin runs no backend code.
+    yield* backends.apply(
+      enabled.flatMap((program) =>
+        program.backend === undefined
+          ? []
+          : [
+              {
+                id: program.id,
+                folder: program.folder,
+                script: program.backend,
+                version: program.version,
+              },
+            ],
+      ),
+    );
+    const servers = enabled.flatMap((program) =>
+      program.mcp === undefined ? [] : [{ id: program.id, script: program.mcp }],
+    );
+    // For the update helper, which stops tool servers that run from these folders.
+    linked.set(
+      enabled
+        .filter((program) => program.linked && program.mcp !== undefined)
+        .map((program) => program.folder),
     );
     const result = yield* Shared.sync({
       target,
@@ -58,9 +86,10 @@ export const make = Effect.gen(function* () {
     }
     for (const { message } of result.failures) yield* Effect.logWarning(message);
     // A removed plugin's processes were stopped by the remove. A disabled one's still run.
+    const folders = new Map(all.map((program) => [program.id, program.folder]));
     const disabled: Array<string> = [];
     for (const id of result.removed) {
-      const folder = NodePath.join(layout.plugins, id);
+      const folder = folders.get(id) ?? NodePath.join(layout.plugins, id);
       if (yield* fs.exists(folder).pipe(Effect.orElseSucceed(() => false))) disabled.push(folder);
     }
     yield* PluginProcesses.stop(disabled);
@@ -71,8 +100,8 @@ export const make = Effect.gen(function* () {
       });
     }
   }).pipe(
-    Effect.catchCause((cause) => Effect.logError("Could not update the tool servers", cause)),
-    Effect.withSpan("ToolServers.reconcile"),
+    Effect.catchCause((cause) => Effect.logError("Could not reconcile the plugins", cause)),
+    Effect.withSpan("Reconcile.run"),
   );
 
   const run = Effect.runForkWith(
@@ -93,7 +122,10 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  return ToolServers.of({
+  // A backend restarting after a crash or a Retry waits for this reconcile to check its files.
+  backends.setRecheck(refresh);
+
+  return Reconcile.of({
     refresh,
     start: Effect.sync(() => {
       run(Effect.promise(() => app.whenReady()).pipe(Effect.andThen(refresh)));
@@ -101,4 +133,4 @@ export const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(ToolServers, make);
+export const layer = Layer.effect(Reconcile, make);

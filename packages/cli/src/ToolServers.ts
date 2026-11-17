@@ -9,6 +9,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import type { HomeLayout } from "@t3mode/shared/Layout";
+import type { PluginProgram } from "@t3mode/shared/PluginStore";
 import * as Shared from "@t3mode/shared/ToolServers";
 
 import * as Processes from "./Processes.ts";
@@ -36,10 +37,13 @@ const disabledIds = Effect.fn("ToolServers.disabledIds")(function* (layout: Home
   );
 });
 
-/** Registers `servers` minus the disabled ones, and stops the processes of disabled plugins. */
+/**
+ * Registers the tool servers of `programs` minus the disabled ones, and stops the processes of
+ * disabled plugins. Backends are main's: T3 Code picks the change up at its next reload.
+ */
 export const reconcile = Effect.fn("ToolServers.reconcile")(function* (
   target: { readonly exe: string; readonly home: HomeLayout },
-  servers: ReadonlyArray<Shared.ToolServer>,
+  programs: ReadonlyArray<PluginProgram>,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -49,7 +53,11 @@ export const reconcile = Effect.fn("ToolServers.reconcile")(function* (
     target: { exe: target.exe, home: target.home.root },
     paths: Shared.configPaths(process.env, userHome, path.join),
     pluginsFolder: target.home.plugins,
-    servers: servers.filter((server) => !disabled.has(server.id)),
+    servers: programs.flatMap((program) =>
+      program.mcp === undefined || disabled.has(program.id)
+        ? []
+        : [{ id: program.id, script: program.mcp }],
+    ),
   });
   for (const { config, id } of result.conflicts) {
     yield* Console.error(
@@ -58,8 +66,9 @@ export const reconcile = Effect.fn("ToolServers.reconcile")(function* (
   }
   for (const { message } of result.failures) yield* Console.error(message);
   const folders: Array<string> = [];
+  const folderOf = new Map(programs.map((program) => [program.id, program.folder]));
   for (const id of result.removed) {
-    const folder = path.join(target.home.plugins, id);
+    const folder = folderOf.get(id) ?? path.join(target.home.plugins, id);
     if (yield* fs.exists(folder).pipe(Effect.orElseSucceed(() => false))) folders.push(folder);
   }
   yield* Processes.stopPluginProcesses(target.exe, folders);

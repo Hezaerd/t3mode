@@ -84,7 +84,8 @@ const canRetry = (runtime: Runtime, plugin: InstalledPlugin): boolean => {
   const kind = runtime.state(plugin.id).kind;
   return (
     kind === "failed" ||
-    (kind === "unavailable" && (plugin.error === undefined || plugin.source.kind === "local"))
+    (kind === "unavailable" && (plugin.error === undefined || plugin.source.kind === "local")) ||
+    runtime.backendStatus(plugin.id)?.state === "failed"
   );
 };
 
@@ -107,6 +108,19 @@ const fragment = (...nodes: ReadonlyArray<Node | null>): DocumentFragment => {
 
 const status = (runtime: Runtime, plugin: InstalledPlugin): { tone: Tone; text: string } => {
   const state: PluginState = runtime.state(plugin.id);
+  // A backend that crashed says more than the page code's own status.
+  const backend = runtime.backendStatus(plugin.id);
+  if (state.kind !== "failed" && state.kind !== "unavailable") {
+    if (backend?.state === "failed") {
+      return {
+        tone: "failed",
+        text: `Backend stopped after ${backend.crashes} crashes: ${backend.error}`,
+      };
+    }
+    if (backend?.state === "restarting") {
+      return { tone: "waiting", text: `Backend restarting after a crash: ${backend.error}` };
+    }
+  }
   switch (state.kind) {
     case "off":
       return { tone: "off", text: runtime.isEnabled(plugin.id) ? "Starting" : "Off" };

@@ -32,6 +32,7 @@ import { withElectronFetch } from "./ElectronFetch.ts";
 import { Files } from "./Files.ts";
 import { helperArguments, launcherCommand } from "./HelperLaunch.ts";
 import { Home } from "./Home.ts";
+import { LinkedFolders } from "./LinkedFolders.ts";
 import { compareVersions } from "@t3mode/shared/Semver";
 import { SettingsStore } from "./SettingsStore.ts";
 import { SignatureJson, signatureCommand } from "./Signature.ts";
@@ -113,6 +114,7 @@ export const make = Effect.fn("Updater.make")(function* (options: UpdaterOptions
   const fs = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const { layout } = yield* Home;
+  const linked = yield* LinkedFolders;
   const http = (yield* HttpClient.HttpClient).pipe(
     HttpClient.filterStatusOk,
     HttpClient.mapRequest(HttpClientRequest.setHeader("user-agent", "t3mode")),
@@ -375,6 +377,7 @@ export const make = Effect.fn("Updater.make")(function* (options: UpdaterOptions
       relaunch,
       relaunchArgs: process.argv.slice(1),
       keepUpdaterEnv: options.updaterEnvPreset,
+      pluginFolders: linked.get(),
     });
     const result = NodeChildProcess.spawnSync(
       "powershell.exe",

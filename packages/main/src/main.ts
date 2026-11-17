@@ -17,19 +17,21 @@ import {
 } from "@t3mode/shared/Layout";
 import { T3MODE_VERSION } from "@t3mode/shared/Version";
 
+import * as Backends from "./Backends.ts";
 import * as BootGuard from "./BootGuard.ts";
 import * as Disks from "./Disks.ts";
 import * as FileLogger from "./FileLogger.ts";
 import * as Files from "./Files.ts";
 import * as Home from "./Home.ts";
 import * as Ipc from "./Ipc.ts";
+import * as LinkedFolders from "./LinkedFolders.ts";
 import * as PluginDataStore from "./PluginDataStore.ts";
 import * as LocalSockets from "./LocalSockets.ts";
 import * as PluginHost from "./PluginHost.ts";
 import * as Preload from "./Preload.ts";
 import * as SettingsStore from "./SettingsStore.ts";
 import * as T3Keybindings from "./T3Keybindings.ts";
-import * as ToolServers from "./ToolServers.ts";
+import * as Reconcile from "./Reconcile.ts";
 import * as Updater from "./Updater.ts";
 
 /**
@@ -78,7 +80,15 @@ const program = Effect.gen(function* () {
   }
   yield* Ipc.register({ safeMode: false });
   yield* Preload.register();
-  yield* (yield* ToolServers.ToolServers).start;
+  // Before the updater's will-quit listener starts the update helper.
+  const backends = yield* Backends.Backends;
+  const runSync = Effect.runSyncWith(yield* Effect.context<never>());
+  yield* Effect.sync(() =>
+    app.prependListener("will-quit", () => {
+      runSync(backends.stopAll);
+    }),
+  );
+  yield* (yield* Reconcile.Reconcile).start;
   yield* guard.watchCrashes;
 });
 
@@ -91,9 +101,11 @@ const MainLayer = Layer.mergeAll(
   Disks.layer,
   T3Keybindings.layer,
   Updater.layer(updaterOptions),
-  Layer.mergeAll(LocalSockets.layer, ToolServers.layer).pipe(Layer.provideMerge(PluginHost.layer)),
+  Layer.mergeAll(LocalSockets.layer, Reconcile.layer).pipe(Layer.provideMerge(PluginHost.layer)),
 ).pipe(
-  Layer.provideMerge(Layer.mergeAll(SettingsStore.layer, PluginDataStore.layer)),
+  Layer.provideMerge(
+    Layer.mergeAll(SettingsStore.layer, PluginDataStore.layer, Backends.layer, LinkedFolders.layer),
+  ),
   Layer.provideMerge(FileLogger.layer),
   Layer.provideMerge(Layer.mergeAll(Files.layer, Home.layer, PlatformLayer)),
 );
