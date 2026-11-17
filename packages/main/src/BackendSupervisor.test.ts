@@ -5,6 +5,7 @@ import { BACKEND_CRASH_WINDOW_MS, type BackendEvent } from "@t3mode/shared/Backe
 
 import {
   BACKEND_EXIT_TIMEOUT_MS,
+  type BackendOwner,
   type BackendProcess,
   type WantedBackend,
   makeSupervisor,
@@ -23,9 +24,12 @@ class FakeChild implements BackendProcess {
   readonly #exit: Array<(code: number) => void> = [];
 
   readonly runs: WantedBackend;
+  /** What happened, in order, across the test's children and indicators. */
+  readonly #trace: Array<string>;
 
-  constructor(runs: WantedBackend) {
+  constructor(runs: WantedBackend, trace: Array<string>) {
     this.runs = runs;
+    this.#trace = trace;
   }
 
   pid = () => 1;
@@ -33,6 +37,7 @@ class FakeChild implements BackendProcess {
     this.received.push(message);
   };
   kill = () => {
+    this.#trace.push("kill");
     this.killed++;
     if (this.exitsOnKill) queueMicrotask(() => this.exit(0));
   };
@@ -51,6 +56,10 @@ class FakeChild implements BackendProcess {
   say(data: unknown) {
     for (const listener of this.#message) listener({ _tag: "message", data });
   }
+  /** The plugin called api.indicator. */
+  indicate(request: unknown) {
+    for (const listener of this.#message) listener({ _tag: "indicator", request });
+  }
   exit(code: number) {
     if (this.exitedWith !== undefined) return;
     this.exitedWith = code;
@@ -68,16 +77,26 @@ const backend = (version = "1"): WantedBackend => ({
 const setup = () => {
   const children: Array<FakeChild> = [];
   const events: Array<BackendEvent> = [];
+  const trace: Array<string> = [];
+  const requests: Array<{ readonly owner: BackendOwner; readonly request: unknown }> = [];
+  const disposed: Array<BackendOwner> = [];
   let rechecks = 0;
   const supervisor = Effect.runSync(
     makeSupervisor({
       spawn: (wanted) => {
-        const child = new FakeChild(wanted);
+        const child = new FakeChild(wanted, trace);
         children.push(child);
         return child;
       },
       openLog: () => ({ write: () => undefined, flush: () => undefined, close: () => undefined }),
       isReady: () => true,
+      indicator: {
+        request: (owner, request) => requests.push({ owner, request }),
+        dispose: (owner) => {
+          trace.push("dispose");
+          disposed.push(owner);
+        },
+      },
     }),
   );
   supervisor.setRecheck(
@@ -99,6 +118,9 @@ const setup = () => {
     supervisor,
     children,
     events,
+    trace,
+    requests,
+    disposed,
     status,
     rechecks: () => rechecks,
     apply: (...wanted: Array<WantedBackend>) => Effect.runSync(supervisor.apply(wanted)),
@@ -322,6 +344,7 @@ describe("messages", () => {
         },
         openLog: () => ({ write: () => undefined, flush: () => undefined, close: () => undefined }),
         isReady: () => true,
+        indicator: { request: () => undefined, dispose: () => undefined },
       }),
     );
     Effect.runSync(
@@ -335,5 +358,79 @@ describe("messages", () => {
       _tag: "status",
       status: { state: "restarting", crashes: 1, error: "could not start: Error: no exe" },
     });
+  });
+});
+
+describe("desktop indicator", () => {
+  const PROBE = { op: "probe", id: 1, n: 1 };
+  const PAINTED = {
+    op: "painted",
+    id: 1,
+    n: 1,
+    rect: { x: 0, y: 0, width: 480, height: 44 },
+  } as const;
+
+  it("routes a request with its process as the owner, and replies to that process", () => {
+    const t = setup();
+    t.apply(backend());
+    t.last().indicate(PROBE);
+    expect(t.requests).toHaveLength(1);
+    const { owner, request } = t.requests[0]!;
+    expect(owner.plugin).toBe("demo");
+    expect(request).toEqual(PROBE);
+    owner.reply(PAINTED);
+    expect(t.last().received).toEqual([{ _tag: "indicator", reply: PAINTED }]);
+  });
+
+  it("drops replies and requests of a process that is no longer the running one", async () => {
+    const t = setup();
+    t.apply(backend());
+    const old = t.last();
+    old.indicate(PROBE);
+    const { owner } = t.requests[0]!;
+    old.exit(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    t.apply(backend());
+    const next = t.last();
+    expect(next).not.toBe(old);
+    owner.reply(PAINTED);
+    old.indicate(PROBE);
+    expect(old.received).toEqual([]);
+    expect(next.received).toEqual([]);
+    expect(t.requests).toHaveLength(1);
+  });
+
+  it("closes the window before asking a backend to exit", async () => {
+    const t = setup();
+    t.apply(backend());
+    t.last().indicate(PROBE);
+    const { owner } = t.requests[0]!;
+    t.apply();
+    expect(t.trace.slice(0, 2)).toEqual(["dispose", "kill"]);
+    expect(t.disposed[0]).toBe(owner);
+    owner.reply(PAINTED);
+    expect(t.last().received).toEqual([]);
+    await flush();
+  });
+
+  it.each([
+    ["a hold", (t: ReturnType<typeof setup>) => Effect.runPromise(t.supervisor.hold("demo"))],
+    ["an update", async (t: ReturnType<typeof setup>) => t.apply(backend("2"))],
+    ["stopAll", (t: ReturnType<typeof setup>) => Effect.runPromise(t.supervisor.stopAll)],
+  ])("closes the window before %s stops the backend", async (_name, stop) => {
+    const t = setup();
+    t.apply(backend());
+    const first = t.last();
+    await stop(t);
+    expect(t.trace.slice(0, 2)).toEqual(["dispose", "kill"]);
+    expect(first.killed).toBe(1);
+  });
+
+  it("closes the window of a backend that crashed", () => {
+    const t = setup();
+    t.apply(backend());
+    t.last().exit(1);
+    expect(t.trace).toEqual(["dispose"]);
+    expect(t.disposed[0]?.plugin).toBe("demo");
   });
 });

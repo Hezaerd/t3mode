@@ -1,6 +1,6 @@
 // Plugin backends: one Electron utilityProcess per enabled plugin with a `backend` script (see
 // "Backends" in docs/architecture.md). The rules live in BackendSupervisor.ts; this module gives
-// them Electron's utilityProcess, the plugin's data folder and its log file.
+// them Electron's utilityProcess, the plugin's data folder, its log file and its desktop indicator.
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFs from "node:fs";
 import * as NodePath from "node:path";
@@ -21,6 +21,7 @@ import {
   type WantedBackend,
   makeSupervisor,
 } from "./BackendSupervisor.ts";
+import * as DesktopIndicator from "./DesktopIndicator.ts";
 import { Home } from "./Home.ts";
 
 export type { WantedBackend } from "./BackendSupervisor.ts";
@@ -74,6 +75,7 @@ export const make = Effect.gen(function* () {
       spawn: spawnUtility(layout),
       openLog: (id) => openBackendLog(layout.pluginLogs, id),
       isReady: () => app.isReady(),
+      indicator: yield* DesktopIndicator.make(layout),
     }),
   );
 });
