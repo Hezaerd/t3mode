@@ -139,9 +139,9 @@ Runs in the page, as one classic script with no imports. Plain TypeScript, no Ef
 - It never updates a plugin without a click.
 - Safe mode starts T3 Code without any plugin.
 
-**A plugin folder** holds two files. An installed copy and a linked dev build use these names. A single-plugin release uses them too.
+**A plugin folder** holds a manifest, page code, and optional program files. An installed copy and a linked dev build use these names. A single-plugin release uses them too.
 
-- `manifest.json` is `{ "id", "name", "version", "description", "author"?, "sockets"?, "api": 1 }`. `id` must match `^[a-z0-9][a-z0-9-]{0,63}$`, because it becomes a folder name, a settings key and a string in generated code. `version` is a semantic version, compared to find updates. `api` is the plugin API's major version, and t3mode refuses a plugin built for another one. The manifest is read without running any code, so the install prompt and the Plugins page can show it.
+- `manifest.json` is `{ "id", "name", "version", "description", "author"?, "sockets"?, "backend"?, "mcp"?, "files"?, "api": 1 }`. `id` must match `^[a-z0-9][a-z0-9-]{0,63}$`, because it becomes a folder name, a settings key and a string in generated code. `version` is a semantic version, compared to find updates. `api` is the plugin API's major version, and t3mode refuses a plugin built for another one. The manifest is read without running any code, so the install prompt and the Plugins page can show it.
 - `plugin.js` is a CommonJS bundle, at most 5 MiB, whose default export is `definePlugin({ options, start })`. Everything it imports is bundled in. The types and `definePlugin` come from `@t3mode/plugin-sdk`.
 
 ```ts
@@ -164,7 +164,7 @@ export default definePlugin({
 
 `api.sockets.connect(name)` returns a `LocalSocket` with `name`, `write(Uint8Array)`, `close()`, `onData(callback)` and `onClose(callback)`. Main opens Windows named pipes and forwards bytes over `t3mode:socket` requests and `t3mode:socket-event` events. It accepts no page-supplied paths. There are at most eight connections per plugin and each write is at most 1 MiB. Plugin stop closes its sockets, including connections that finish after stop. Main closes an owner's connections on destruction, renderer exit and main-frame navigation, including reload.
 
-All plugins share the page, so main cannot verify which plugin is calling. The allowlist limits the page to sockets that some installed plugin declared and that the user saw at install. Updates can add socket names without a new prompt. This remains a known gap. Main contains only generic socket transport. Protocol logic belongs in plugins.
+All plugins share the page, so main cannot verify which plugin is calling. The allowlist limits the page to sockets that some installed plugin declared and that the user saw at install. Updates ask again when socket access grows beyond the approved patterns. Main contains only generic socket transport. Protocol logic belongs in plugins.
 
 **Monorepos.** A root `t3mode.json` maps plugin ids to built folders.
 
@@ -178,23 +178,29 @@ One GitHub release contains `t3mode.json`, `<id>.manifest.json`, and `<id>.plugi
 
 `plugin link <folder>` reads the root registry and resolves every route from that folder. Each built manifest must match its registry key. The store validates every plugin before writing the lockfile once. Without a registry, the command links the folder as one plugin.
 
-**The lockfile.** `<home>/plugins.json` lists what's installed, as `{ "version": 1, "plugins": { "<id>": { "source", "version", "sha256"? } } }`. A source is one of two kinds.
+**Program files.** API 1 manifests can name a `backend` script, an `mcp` script, and a `files` array of extra assets. Script names end in `.js` or `.cjs`. File names contain 1 to 100 letters, digits, dots, underscores, or hyphens, start with a letter or digit, and don't end in a dot. No two extra names may differ only by case, because Windows stores them as one file. Reserved names are `manifest.json`, `plugin.js`, and `t3mode.json`. The deduplicated extra set holds at most 20 files. Release assets use plain names for standalone plugins and `<id>.<name>` for registry plugins.
+
+`plugin.js` has a 5 MiB cap. Each backend or MCP script has a 20 MiB cap. Each extra asset has a 64 MiB cap. All extras together have a 128 MiB cap. Downloads enforce the caps while streaming. These files do not run yet.
+
+**The lockfile.** `<home>/plugins.json` lists what's installed, as `{ "version": 1, "plugins": { "<id>": { "source", "version", "sha256"?, "files"?, "backend"?, "mcp"?, "approved"? } } }`. A source is one of two kinds.
 
 - `{ "kind": "github", "owner", "repo", "tag"?, "plugin"? }`. Its files come from the release. The URL is `https://github.com/<owner>/<repo>/releases/latest/download/<file>`, or `/releases/download/<tag>/<file>` when the install was pinned to a tag. They're copied to `<home>/plugins/<id>/`. These URLs aren't GitHub's REST API, so its limit of 60 requests an hour for unauthenticated clients doesn't apply. `sha256` is the hash of the installed `plugin.js`, and a copy that no longer matches it isn't loaded.
 - `{ "kind": "local", "path" }`, added by `pnpm t3mode plugin link <folder>`, for developing a plugin. The two files are read from that folder on every page load, so a rebuild and Ctrl+R pick up changes. Only the CLI adds local sources. Main never takes a file path from page code. Its decode of the page's requests accepts GitHub sources only.
+
+`files` maps every pinned file name to its SHA-256 hash, including `plugin.js`. `sha256` keeps the same hash for older t3mode versions. `backend` and `mcp` select pinned scripts. `approved` records backend and MCP booleans and socket patterns. An older entry with only `sha256` reads as a `plugin.js` pin with its installed manifest's access approved. The next write upgrades it. Local sources have no pins and record their declared scripts and approved access.
 
 A `plugins.json` that doesn't decode, including one with a key that isn't a valid id, reads as empty and is logged. Every install, link and remove is refused until it is fixed or deleted, so a bad edit is never written over.
 
 **Install.** `PluginStore` (in shared, used by main and the CLI) does it in two steps.
 
 1. **Preview.** Parse the link. It can be `owner/repo`, `github.com/owner/repo`, the repo URL or a release tag URL, with an optional `@tag`. Probe `manifest.json` first. If it exists, decode it and check its API and conflicts. If it is missing, fetch `t3mode.json` and check each named manifest with concurrency four. The preview returns the repository source and a list of offers. Each offer is ready with its source and manifest, or unavailable with its id and reason. A bad registry fails the preview. A bad plugin leaves the other offers available.
-2. **Install**, on confirmation. Fetch the manifest again and refuse if its id differs from the one the user saw. Fetch `plugin.js` with a size cap and hash it. Write each file next to its final name and rename it over, then write the lockfile entry. Because the lockfile entry is written last, a crash midway leaves the old install or a hash mismatch, never a plugin that loads half-updated code.
+2. **Install**, on confirmation. Fetch the manifest again and refuse if its id differs from the one the user saw. The page and the CLI send the access they showed, and the install is refused if the release now declares more. Fetch every declared file with its size cap and hash it. Write each file next to its final name and rename it over, then write the lockfile entry. Delete obsolete files only after that write. Because the lockfile entry is written last, a crash midway leaves the old install or a hash mismatch, never a plugin that loads half-updated code.
 
 An id that's already installed from another source is refused. A repo is the same source whatever its tag, so installing `owner/repo@v2` over `owner/repo` pins it, and GitHub names are compared without case. Running the same install twice ends in the same state. In main, requests go through Electron's `net.fetch`, like the updater's. `T3MODE_GITHUB_URL` replaces `https://github.com`, for tests and the sandbox.
 
 The optional GitHub source field `plugin` selects a registry id. Downloads prefix manifest and code asset names with `<id>.`. Installed files keep plain names. The Plugins page keeps multiple offers open after an install and marks that offer installed.
 
-**Updates.** "Check for updates" on the Plugins page, and `plugin update` in the CLI, fetch each unpinned GitHub plugin's latest `manifest.json` (`<id>.manifest.json` for a registry plugin) and compare versions. A newer one shows "Update to x.y" on its card. Nothing updates on its own, because a new release is new code.
+**Updates.** "Check for updates" on the Plugins page, and `plugin update` in the CLI, fetch each unpinned GitHub plugin's latest `manifest.json` (`<id>.manifest.json` for a registry plugin) and compare versions. A newer one shows "Update to x.y" on its card. Nothing updates on its own, because a new release is new code. An update that adds backend access, MCP access, or socket patterns outside the approved patterns asks for approval before downloading code. The page lists the declared access and retries after approval. `plugin update --yes` approves without asking.
 
 **Loading.** The preload asks main for the page scripts. These are each installed plugin's `plugin.js`, wrapped by main, then `renderer.js`. The preload runs each one with its own `webFrame.executeJavaScript` call and `//# sourceURL=t3mode-plugin/<id>.js`, so a plugin that doesn't parse can't stop the others or the runtime. The wrapper registers the plugin's module under its manifest id without running it.
 

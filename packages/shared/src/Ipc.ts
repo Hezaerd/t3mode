@@ -1,5 +1,6 @@
 // The contract between the preload and the main process.
 import type {
+  Access,
   GithubSource,
   InstalledPlugin,
   PluginData,
@@ -63,8 +64,13 @@ export const RENDERER_SCRIPT_NAME = "t3mode-renderer.js";
 export type PluginAction =
   | { readonly _tag: "list" }
   | { readonly _tag: "preview"; readonly input: string }
-  | { readonly _tag: "install"; readonly source: GithubSource; readonly id: string }
-  | { readonly _tag: "update"; readonly id: string }
+  | {
+      readonly _tag: "install";
+      readonly source: GithubSource;
+      readonly id: string;
+      readonly approved: Access;
+    }
+  | { readonly _tag: "update"; readonly id: string; readonly approved?: Access }
   | { readonly _tag: "remove"; readonly id: string }
   | { readonly _tag: "check" };
 
@@ -115,8 +121,12 @@ export interface NativeBridge {
   readonly plugins: {
     readonly list: () => Promise<ReadonlyArray<InstalledPlugin>>;
     readonly preview: (input: string) => Promise<PluginResult<PluginPreview>>;
-    readonly install: (source: GithubSource, id: string) => Promise<PluginResult<InstalledPlugin>>;
-    readonly update: (id: string) => Promise<PluginResult<InstalledPlugin>>;
+    readonly install: (
+      source: GithubSource,
+      id: string,
+      approved: Access,
+    ) => Promise<PluginResult<InstalledPlugin>>;
+    readonly update: (id: string, approved?: Access) => Promise<PluginResult<InstalledPlugin>>;
     readonly remove: (id: string) => Promise<PluginResult<RemoveResult>>;
     readonly checkUpdates: () => Promise<PluginResult<ReadonlyArray<InstalledPlugin>>>;
   };

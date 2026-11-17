@@ -7,6 +7,8 @@
 // The pane is React's. t3mode adds its page as the pane's last child and hides React's
 // children with CSS while it is open, so React's nodes are never moved or removed.
 import {
+  accessLines,
+  declaredAccess,
   type InstalledPlugin,
   type PluginPreview,
   type PluginOffer,
@@ -698,12 +700,9 @@ export class SettingsPage {
           className: native.rowDescription,
           text: `${by}github.com/${sourceLabel(source)}`,
         }),
-        manifest.sockets
-          ? h("p", {
-              className: native.rowDescription,
-              text: `Can connect to local sockets: ${manifest.sockets.join(", ")}`,
-            })
-          : null,
+        ...accessLines(declaredAccess(manifest)).map((text) =>
+          h("p", { className: native.rowDescription, text }),
+        ),
         manifest.description
           ? h("p", { className: native.rowDescription, text: manifest.description })
           : null,
@@ -753,7 +752,11 @@ export class SettingsPage {
     installed: ReadonlyArray<string>,
   ): Promise<void> {
     this.#setStep({ kind: "installing", preview, installed, id: offer.manifest.id });
-    const result = await this.#runtime.install(offer.source, offer.manifest.id);
+    const result = await this.#runtime.install(
+      offer.source,
+      offer.manifest.id,
+      declaredAccess(offer.manifest),
+    );
     if (!result.ok) {
       if (preview.offers.length === 1) {
         this.#setStep({ kind: "failed", error: result.error });
@@ -790,6 +793,42 @@ export class SettingsPage {
 
   async #update(plugin: InstalledPlugin): Promise<void> {
     const result = await this.#runtime.updatePlugin(plugin.id);
+    if (!result.ok && result.approval) {
+      const approval = result.approval;
+      const panel = h(
+        "div",
+        { className: `${native.card} t3mode-confirm` },
+        h("h3", { className: native.rowTitle, text: `Approve update for ${plugin.name}` }),
+        ...accessLines(result.approval).map((text) =>
+          h("p", { className: native.rowDescription, text }),
+        ),
+        h(
+          "div",
+          { className: "t3mode-actions" },
+          button({
+            text: "Approve and update",
+            onClick: () =>
+              void busy(approve, async () => {
+                const updated = await this.#runtime.updatePlugin(plugin.id, approval);
+                toast(
+                  updated.ok
+                    ? `${updated.value.name} is updated to ${updated.value.version}.`
+                    : updated.error,
+                  updated.ok ? "info" : "error",
+                );
+                panel.remove();
+              }),
+          }),
+          button({ text: "Cancel", onClick: () => panel.remove() }),
+        ),
+      );
+      const approve = panel.querySelector("button")!;
+      this.#body?.querySelector("[data-t3mode-approval]")?.remove();
+      panel.setAttribute("data-t3mode-approval", plugin.id);
+      this.#body?.prepend(panel);
+      panel.scrollIntoView({ block: "nearest" });
+      return;
+    }
     toast(
       result.ok ? `${result.value.name} is updated to ${result.value.version}.` : result.error,
       result.ok ? "info" : "error",

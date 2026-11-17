@@ -3,6 +3,7 @@
 import type { OptionsSpec, PluginApi, PluginDefinition, PluginReport } from "@t3mode/plugin-sdk";
 import type { Info, NativeBridge } from "@t3mode/shared/Ipc";
 import type {
+  Access,
   InstalledPlugin,
   GithubSource,
   PluginDataSnapshot,
@@ -234,13 +235,19 @@ export class Runtime {
     return this.#ask("Preview", () => this.#native.plugins.preview(input));
   }
 
-  async install(source: GithubSource, id: string): Promise<PluginResult<InstalledPlugin>> {
-    const result = await this.#ask("Install", () => this.#native.plugins.install(source, id));
+  async install(
+    source: GithubSource,
+    id: string,
+    approved: Access,
+  ): Promise<PluginResult<InstalledPlugin>> {
+    const result = await this.#ask("Install", () =>
+      this.#native.plugins.install(source, id, approved),
+    );
     return this.#loadAndStart(result);
   }
 
-  async updatePlugin(id: string): Promise<PluginResult<InstalledPlugin>> {
-    const result = await this.#ask("Update", () => this.#native.plugins.update(id));
+  async updatePlugin(id: string, approved?: Access): Promise<PluginResult<InstalledPlugin>> {
+    const result = await this.#ask("Update", () => this.#native.plugins.update(id, approved));
     return this.#loadAndStart(result);
   }
 
