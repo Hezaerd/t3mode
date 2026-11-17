@@ -309,17 +309,18 @@ describe("sync", () => {
         const fs = yield* FileSystem.FileSystem;
         const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3mode-sync-" });
         const pluginsFolder = NodePath.join(dir, "plugins");
-        const result = yield* sync({
-          target,
-          paths: {
-            claude: NodePath.join(dir, "no-claude", ".claude.json"),
-            codex: NodePath.join(dir, "no-codex", "config.toml"),
-          },
-          pluginsFolder,
-          servers: [server],
-        });
-        const marker = yield* fs.readFileString(NodePath.join(pluginsFolder, "package.json"));
-        return { result, marker };
+        return {
+          result: yield* sync({
+            target,
+            paths: {
+              claude: NodePath.join(dir, "no-claude", ".claude.json"),
+              codex: NodePath.join(dir, "no-codex", "config.toml"),
+            },
+            pluginsFolder,
+            servers: [server],
+          }),
+          marker: yield* fs.readFileString(NodePath.join(pluginsFolder, "package.json")),
+        };
       }).pipe(
         Effect.scoped,
         Effect.provide(Layer.mergeAll(NodeFileSystem.layer, NodePathLayer.layer)),
