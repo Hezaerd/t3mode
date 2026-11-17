@@ -6,6 +6,8 @@
 import type { BackendApi, BackendDefinition, LogLevel } from "@t3mode/plugin-sdk";
 import { BackendEnv, type FromBackendHost, type ToBackendHost } from "@t3mode/shared/Backends";
 
+import { makeIndicator } from "./Indicator.ts";
+
 const port = process.parentPort;
 const id = process.env[BackendEnv.plugin] ?? "";
 const script = process.env[BackendEnv.script] ?? "";
@@ -34,8 +36,13 @@ const deliver = (data: unknown) => {
     }
   }
 };
+const indicator = makeIndicator({
+  send: (request) => post({ _tag: "indicator", request }),
+  now: () => performance.now(),
+});
 port.on("message", (event) => {
   const message = event.data as ToBackendHost | null;
+  if (message?._tag === "indicator") indicator.receive(message.reply);
   if (message?._tag !== "message") return;
   if (queued === undefined) deliver(message.data);
   else if (queued.length < MAX_QUEUED) queued.push(message.data);
@@ -59,6 +66,7 @@ const api: BackendApi = Object.freeze({
   },
   log: (level: LogLevel, message: string) =>
     write(level === "error" || level === "warn" ? process.stderr : process.stdout, level, message),
+  indicator: Object.freeze({ show: indicator.show }),
 });
 
 let definition: BackendDefinition | undefined;
