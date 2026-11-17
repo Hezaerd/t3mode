@@ -1,6 +1,6 @@
 {
   "name": "@t3mode/plugin-sdk",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "definePlugin and the plugin API types for t3mode, the plugin loader for T3 Code",
   "license": "MIT",
   "repository": {

@@ -8,6 +8,7 @@ import { Channel, type Info, isMainWindowUrl } from "@t3mode/shared/Ipc";
 import { T3MODE_VERSION } from "@t3mode/shared/Version";
 
 import { BootGuard } from "./BootGuard.ts";
+import { Disks } from "./Disks.ts";
 import { withElectronFetch } from "./ElectronFetch.ts";
 import { Home } from "./Home.ts";
 import { PluginDataStore } from "./PluginDataStore.ts";
@@ -79,6 +80,7 @@ export const register = Effect.fn("Ipc.register")(function* (options: {
   const pluginData = yield* PluginDataStore;
   const keybindings = yield* T3Keybindings;
   const updater = yield* Updater;
+  const disks = yield* Disks;
   // Pages that asked for the update status get every change pushed to them.
   const subscribed = new WeakSet<WebContents>();
   const subscribe = (sender: WebContents) =>
@@ -127,6 +129,7 @@ export const register = Effect.fn("Ipc.register")(function* (options: {
     handle(Channel.readSettings, () => settings.read);
     handle(Channel.writeSettings, (args) => settings.write(args[0]));
     handle(Channel.openLogs, () => openPath(layout.logs));
+    handle(Channel.disks, () => disks.list);
     handle(Channel.shortcut, (args) =>
       Schema.decodeUnknownEffect(ShortcutActionSchema)(args[0]).pipe(
         Effect.flatMap(keybindings.shortcut),

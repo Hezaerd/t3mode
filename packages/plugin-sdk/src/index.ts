@@ -62,6 +62,16 @@ export interface LocalSocket {
   onClose(callback: (error?: string) => void): void;
 }
 
+/** A local fixed drive. */
+export interface Disk {
+  /** The drive's root, such as `C:\`. */
+  readonly path: string;
+  /** Bytes. */
+  readonly total: number;
+  /** Bytes available to the user. */
+  readonly free: number;
+}
+
 export interface PluginApi<O extends OptionsSpec = OptionsSpec> {
   /** The id from the plugin's manifest.json. */
   readonly id: string;
@@ -125,6 +135,11 @@ export interface PluginApi<O extends OptionsSpec = OptionsSpec> {
       budget?: number,
     ) => T | undefined;
   };
+  /**
+   * Size and free space of each local fixed drive, cached for 30 seconds. Network and removable
+   * drives are left out. Added in SDK 1.3.0, so check for it before calling.
+   */
+  readonly disks?: () => Promise<ReadonlyArray<Disk>>;
 }
 
 export interface PluginDefinition<O extends OptionsSpec = OptionsSpec> {

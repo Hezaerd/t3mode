@@ -94,6 +94,7 @@ const start = (): void => {
       if (!script) throw new Error(`Plugin ${id} has no code that can be loaded.`);
       await runScript(script);
     },
+    disks: () => ipcRenderer.invoke(Channel.disks),
   };
   contextBridge.exposeInMainWorld("t3modeNative", bridge);
   const logError = (message: string) => bridge.log("error", message).catch(() => undefined);
