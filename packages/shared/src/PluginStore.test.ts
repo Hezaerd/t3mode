@@ -104,13 +104,18 @@ const withStore = <A, E>(
     readonly fs: FileSystem.FileSystem;
     readonly path: Path.Path;
   }) => Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | Scope.Scope>,
+  stopProcesses?: PluginStore.PluginStoreOptions["stopProcesses"],
 ) =>
   Effect.runPromise(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const home = homeLayout(yield* fs.makeTempDirectoryScoped({ prefix: "t3mode-plugins-" }));
-      const store = yield* PluginStore.make({ layout: home, githubBase: base });
+      const store = yield* PluginStore.make({
+        layout: home,
+        githubBase: base,
+        ...(stopProcesses === undefined ? {} : { stopProcesses }),
+      });
       return yield* body({ store, home, fs, path });
     }).pipe(Effect.scoped, Effect.provide(PlatformLayer)),
   );
@@ -587,6 +592,15 @@ describe("PluginStore", () => {
     ));
 });
 
+const program = (version: string) => {
+  publish("someone/program", {
+    manifest: manifest({ version, mcp: "mcp.cjs", files: ["a.node"] }),
+    code: CODE,
+  });
+  for (const name of ["mcp.cjs", "a.node"])
+    assets.set(`/someone/program/releases/latest/download/${name}`, version);
+};
+
 describe("program packaging", () => {
   it("pins every binary and script, refuses access growth, and removes obsolete files", () =>
     withStore(({ store, fs, path, home }) =>
@@ -697,6 +711,54 @@ describe("program packaging", () => {
         expect(JSON.parse(yield* fs.readFileString(home.pluginsLock)).plugins).toEqual({});
       }),
     ));
+
+  it("stops a plugin's processes before replacing or deleting its files", () => {
+    const calls: Array<{ folder: string; version: string }> = [];
+    let refuse = false;
+    let lockfile = "";
+    return withStore(
+      ({ store, fs, path, home }) =>
+        Effect.gen(function* () {
+          lockfile = home.pluginsLock;
+          const access = { backend: false, mcp: true, sockets: [] };
+          program("1.0.0");
+          yield* store.install(github("someone/program"), "my-plugin", access);
+          expect(calls).toEqual([]);
+          const folder = path.join(home.plugins, "my-plugin");
+          expect(yield* store.toolServers).toEqual([
+            { id: "my-plugin", script: path.join(folder, "mcp.cjs") },
+          ]);
+
+          program("1.1.0");
+          yield* store.update("my-plugin", access);
+          expect(calls).toEqual([{ folder, version: "1.0.0" }]);
+          expect(yield* fs.readFileString(path.join(folder, "a.node"))).toBe("1.1.0");
+
+          yield* fs.writeFileString(path.join(folder, "mcp.cjs"), "changed");
+          expect(yield* store.toolServers).toEqual([]);
+
+          refuse = true;
+          expect(yield* failure(store.remove("my-plugin"))).toBe("still running");
+          expect(yield* fs.exists(folder)).toBe(true);
+          expect(JSON.parse(yield* fs.readFileString(home.pluginsLock)).plugins).toHaveProperty(
+            "my-plugin",
+          );
+          refuse = false;
+          yield* store.remove("my-plugin");
+          expect(calls.at(-1)).toEqual({ folder, version: "1.1.0" });
+          expect(yield* fs.exists(folder)).toBe(false);
+        }),
+      (folder) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const version = JSON.parse(yield* fs.readFileString(lockfile).pipe(Effect.orDie)).plugins[
+            "my-plugin"
+          ].version;
+          calls.push({ folder, version });
+          if (refuse) return yield* new PluginStore.PluginError({ message: "still running" });
+        }).pipe(Effect.provide(NodeFileSystem.layer)),
+    );
+  });
 
   it.each([
     { backend: "bad.node" },

@@ -3,6 +3,7 @@ import * as NodeFs from "node:fs";
 import * as NodeOs from "node:os";
 import * as NodePath from "node:path";
 
+import * as NodeChildProcessSpawner from "@effect/platform-node/NodeChildProcessSpawner";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePathLayer from "@effect/platform-node/NodePath";
 import * as Effect from "effect/Effect";
@@ -82,8 +83,9 @@ const build = (layout: ReturnType<typeof homeLayout>) =>
         Layer.mergeAll(
           Files.layer,
           Layer.succeed(Home, Home.of({ layout })),
-          NodeFileSystem.layer,
-          NodePathLayer.layer,
+          NodeChildProcessSpawner.layer.pipe(
+            Layer.provideMerge(Layer.mergeAll(NodeFileSystem.layer, NodePathLayer.layer)),
+          ),
           FetchHttpClient.layer,
         ),
       ),

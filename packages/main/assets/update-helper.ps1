@@ -1,6 +1,6 @@
 # Installs a T3 Code update after T3 Code quits, then puts the t3mode shim back.
 # Started detached by the t3mode loader (packages/main/src/Updater.ts) from Electron's will-quit.
-#   1. Wait for every T3 Code process to exit.
+#   1. Wait for every T3 Code process to exit, stopping plugin tool servers that run its exe.
 #   2. Run the downloaded installer silently, the way electron-updater does (--updated /S),
 #      and wait for that process.
 #   3. Re-apply the shim with repair.cjs, run by T3 Code's own exe in Node mode.
@@ -43,6 +43,28 @@ function Get-T3Processes {
     })
 }
 
+# Plugin tool servers run T3 Code's exe, started by Claude or Codex, so they can outlive T3 Code
+# and would hold the update. Stops every process of an exe in the install folder whose command
+# line names a file under <home>\plugins\ (the same match as stopProcessesScript in
+# packages/shared/src/ToolServers.ts). Get-Process has no CommandLine in Windows PowerShell 5.1.
+function Stop-PluginProcesses {
+  try {
+    $prefix = $InstallDir.TrimEnd("\") + "\"
+    $plugins = (Join-Path $HomeDir "plugins").TrimEnd("\") + "\"
+    $found = @(Get-CimInstance Win32_Process | Where-Object {
+        $_.ProcessId -ne $PID -and $_.ExecutablePath -and $_.CommandLine -and
+        $_.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -and
+        $_.CommandLine.IndexOf($plugins, [StringComparison]::OrdinalIgnoreCase) -ge 0
+      })
+    if ($found.Count -eq 0) { return }
+    foreach ($p in $found) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    foreach ($p in $found) { Wait-Process -Id $p.ProcessId -Timeout 10 -ErrorAction SilentlyContinue }
+    Write-Log "Stopped $($found.Count) plugin process(es): $(($found | ForEach-Object { $_.ProcessId }) -join ', ')"
+  } catch {
+    Write-Log "Could not stop plugin processes: $_"
+  }
+}
+
 function Get-T3Exe {
   Get-ChildItem -LiteralPath $InstallDir -Filter "*.exe" |
     Where-Object { $_.Name -notlike "Uninstall*" } |
@@ -60,6 +82,8 @@ try {
   try { Wait-Process -Id $ParentPid -Timeout 120 -ErrorAction SilentlyContinue } catch {}
   $deadline = (Get-Date).AddSeconds(120)
   while ((Get-T3Processes).Count -gt 0) {
+    Stop-PluginProcesses
+    if ((Get-T3Processes).Count -eq 0) { break }
     if ((Get-Date) -gt $deadline) {
       Write-Log "T3 Code is still running after 2 minutes; the update is skipped until the next quit."
       exit 1
