@@ -107,14 +107,10 @@ describe("makeIndicator", () => {
 
   it("ignores a repeated answer", async () => {
     const t = setup();
-    const showing = t.indicator.show({ label: "Claude", detail: null });
-    const first = t.lastProbe();
-    t.answer(first);
-    const handle = await showing;
-    await vi.advanceTimersByTimeAsync(2_900);
-    t.answer(first);
-    await vi.advanceTimersByTimeAsync(101);
-    expect(handle.live()).toBe(false);
+    const handle = await shown(t);
+    t.answer(t.lastProbe(), { ...RECT, x: RECT.x + 1 });
+    expect(handle.signal.aborted).toBe(false);
+    expect(handle.live()).toBe(true);
   });
 
   it("ignores an answer that comes after its proof would have expired", async () => {
