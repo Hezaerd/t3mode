@@ -1,0 +1,13 @@
+{
+  "name": "t3mode-plugin-monorepo",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r build"
+  },
+  "devDependencies": {
+    "@t3mode/plugin-sdk": "^1.2.0",
+    "vite-plus": "1.4.0"
+  }
+}

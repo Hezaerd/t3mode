@@ -1,0 +1,8 @@
+{
+  "id": "hello",
+  "name": "Hello",
+  "version": "1.0.0",
+  "description": "Outlines the message box in the theme color.",
+  "author": "you",
+  "api": 1
+}

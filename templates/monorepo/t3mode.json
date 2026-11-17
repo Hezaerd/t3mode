@@ -1,0 +1,6 @@
+{
+  "plugins": {
+    "hello": "plugins/hello/dist",
+    "goodbye": "plugins/goodbye/dist"
+  }
+}
