@@ -103,6 +103,7 @@ Everything here runs **synchronously** (`Effect.runSync` over sync file access),
 ### 3. Preload (`packages/preload`)
 
 - Runs only in the main `t3code://app` frame. It does nothing in the preview browser, pop-ups or data: pages.
+- Adds "T3 Mode v<version>" to T3 Code's boot splash (`#boot-shell`) once the page has parsed, before T3 Code's scripts run. The label goes away with the splash.
 - Exposes `window.t3modeNative` through `contextBridge`. Each method is one IPC call.
 - Reads the page scripts from main over IPC (each installed plugin, then `renderer.js`) and runs each in the main world with its own `webFrame.executeJavaScript` call. That gets past the page's CSP and lets plugins reach React-managed DOM. A script that fails is logged, and the rest still run.
 
