@@ -252,7 +252,6 @@ try {
     const folder = resolve(root, args.out);
     await mkdir(folder, { recursive: true });
     for (const time of times) {
-      // One page renders every frame, so frames are captured one at a time, in order.
       // eslint-disable-next-line no-await-in-loop
       const png = await capture(time);
       // eslint-disable-next-line no-await-in-loop

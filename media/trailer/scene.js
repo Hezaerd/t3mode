@@ -28,11 +28,10 @@ const ease = {
   spring: (u) => (u >= 1 ? 1 : 1 - Math.exp(-6.5 * u) * Math.cos(2.4 * Math.PI * u)),
 };
 
-// A key's ease shapes the segment that arrives at it; time is a cue plus beats.
-const key = (id, beats, values, easing = "expoOut") => ({
-  frame: frameOf(cue(id) + beats * beat),
+const key = (id, beatsAfterCue, values, arriveEasing = "expoOut") => ({
+  frame: frameOf(cue(id) + beatsAfterCue * beat),
   values,
-  easing,
+  easing: arriveEasing,
 });
 const start = (values) => key("ask", 0, values, "hold");
 
@@ -43,8 +42,8 @@ const FRAME = { x: 584, y: 96, w: 400, h: 240 };
 const BACKEND = { x: 604, y: 152, w: 360, h: 164, r: 14 };
 const TOOLS = { x: 96, y: 426, w: 400, h: 164, r: 14 };
 const PILL = { x: 290, y: 584, w: 500, h: 84, r: 42 };
-// The diagram sits centered until the lockfile needs the bottom third; DIAGRAM_DROP is that offset.
-const DIAGRAM_DROP = 190;
+const LOCKFILE_CLEARANCE = 190;
+const POSTER_WORDS = 2;
 const down = (rect, dy) => ({ ...rect, y: rect.y + dy });
 const jsonLine = (index) => ({
   x: CARD.x + 18,
@@ -193,8 +192,8 @@ const tracks = [
       key("drop", 10 * F, { ...CARD, scale: 1, opacity: 1, blur: 0 }, "spring"),
       key("split", -2 * F, { ...CARD, scale: 1 }, "hold"),
       key("split", 0, { ...CARD, scale: 0.97 }, "quartOut"),
-      key("split", 12 * F, { ...down(PAGE, DIAGRAM_DROP), scale: 1 }, "spring"),
-      key("pin-1", 0, down(PAGE, DIAGRAM_DROP), "hold"),
+      key("split", 12 * F, { ...down(PAGE, LOCKFILE_CLEARANCE), scale: 1 }, "spring"),
+      key("pin-1", 0, down(PAGE, LOCKFILE_CLEARANCE), "hold"),
       key("pin-1", 12 * F, PAGE, "quartOut"),
       key("payoff", -2 * F, { ...PAGE, scale: 1 }, "hold"),
       key("payoff", 0, { ...PAGE, scale: 0.96 }, "quartOut"),
@@ -237,9 +236,8 @@ const tracks = [
   },
   ...askWords.map((span, index) => ({
     el: span,
-    // Two words are already up on frame 0 so the muted autoplay frame reads, and the last word lands before refuse.
     keys:
-      index < 2
+      index < POSTER_WORDS
         ? [start({ opacity: 1, ty: 0 })]
         : [start({ opacity: 0, ty: 0 }), ...rise("ask", (index - 1) / 2, 8)],
   })),
@@ -304,8 +302,8 @@ const tracks = [
   {
     el: $("diagram"),
     keys: [
-      start({ ty: DIAGRAM_DROP, scale: 1, opacity: 1 }),
-      key("pin-1", 0, { ty: DIAGRAM_DROP }, "hold"),
+      start({ ty: LOCKFILE_CLEARANCE, scale: 1, opacity: 1 }),
+      key("pin-1", 0, { ty: LOCKFILE_CLEARANCE }, "hold"),
       key("pin-1", 12 * F, { ty: 0 }, "quartOut"),
       key("payoff", -2 * F, { scale: 1, opacity: 1 }, "hold"),
       key("payoff", 0, { scale: 0.97, opacity: 1 }, "quartOut"),
@@ -319,7 +317,7 @@ const tracks = [
     el,
     keys: [
       start({
-        ...down(jsonLine(index), -DIAGRAM_DROP),
+        ...down(jsonLine(index), -LOCKFILE_CLEARANCE),
         opacity: 0,
         reveal: 0,
         bg: alpha(color.accent, 0.14),
@@ -331,7 +329,7 @@ const tracks = [
         "split",
         0,
         {
-          ...down(jsonLine(index), -DIAGRAM_DROP),
+          ...down(jsonLine(index), -LOCKFILE_CLEARANCE),
           bg: alpha(color.accent, 0.14),
           border: alpha(color.accent, 0),
         },
@@ -344,7 +342,7 @@ const tracks = [
     el: $("files"),
     keys: [
       start({
-        ...down(jsonLine(6), -DIAGRAM_DROP),
+        ...down(jsonLine(6), -LOCKFILE_CLEARANCE),
         opacity: 0,
         reveal: 0,
         bg: alpha(color.accent, 0.14),
@@ -502,8 +500,7 @@ const mix = (from, to, amount) => {
   return `rgba(${r.toFixed(1)},${g.toFixed(1)},${bl.toFixed(1)},${(al / 255).toFixed(3)})`;
 };
 
-// Every intended move is short; a long eased segment means a missing hold key, not a slow move.
-const LONGEST_MOVE = 24;
+const MAX_EASED_SEGMENT_FRAMES = 24;
 
 const compile = (el, keys) => {
   const props = {};
@@ -519,11 +516,11 @@ const compile = (el, keys) => {
       if (
         from &&
         to.easing !== "hold" &&
-        to.frame - from.frame > LONGEST_MOVE &&
+        to.frame - from.frame > MAX_EASED_SEGMENT_FRAMES &&
         from.value !== to.value
       )
         throw new Error(
-          `${el.id || el.textContent} ${name}: ${to.frame - from.frame}-frame eased segment ending at frame ${to.frame}`,
+          `${el.id || el.textContent} ${name}: ${to.frame - from.frame}-frame eased segment ending at frame ${to.frame}; missing hold key?`,
         );
     }
   }

@@ -12,7 +12,7 @@ const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 const cueTime = (cue) => at(cue.bar, cue.beat);
 const sample = (time) => Math.round(time * rate);
 const stops = cues
-  .filter((cue) => cue.accent === "stop")
+  .filter((cue) => cue.accent === "silence")
   .map((cue) => ({
     id: cue.id,
     start: sample(cueTime(cue)),

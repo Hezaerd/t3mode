@@ -17,8 +17,6 @@ export const sections = [
   { id: "outro", bar: 16, bars: 3 },
 ];
 
-// accent tells the music what to play on the cue: impact (drop-sized hit), hit (short accent),
-// tick (small percussive), stop (cut everything until the next cue), null (no accent).
 export const cues = [
   { id: "ask", bar: 0, beat: 0, accent: null },
   { id: "refuse", bar: 1, beat: 0, accent: "hit" },
@@ -26,7 +24,7 @@ export const cues = [
   { id: "word-now-ship", bar: 2, beat: 2, accent: "tick" },
   { id: "word-a", bar: 3, beat: 0, accent: "tick" },
   { id: "word-backend", bar: 3, beat: 2, accent: "hit" },
-  { id: "pre-drop-gap", bar: 3, beat: 3.5, accent: "stop" },
+  { id: "pre-drop-gap", bar: 3, beat: 3.5, accent: "silence" },
   { id: "drop", bar: 4, beat: 0, accent: "impact" },
   { id: "line-backend", bar: 4, beat: 2, accent: "tick" },
   { id: "line-mcp", bar: 5, beat: 0, accent: "tick" },
@@ -38,7 +36,7 @@ export const cues = [
   { id: "own-process", bar: 8, beat: 0, accent: "hit" },
   { id: "wire-claude", bar: 9, beat: 0, accent: "tick" },
   { id: "wire-codex", bar: 9, beat: 2, accent: "tick" },
-  { id: "crash", bar: 10, beat: 0, accent: "stop" },
+  { id: "crash", bar: 10, beat: 0, accent: "silence" },
   { id: "restart", bar: 10, beat: 2, accent: "hit" },
   { id: "pin-1", bar: 10, beat: 3, accent: "tick" },
   { id: "pin-2", bar: 10, beat: 3.5, accent: "tick" },

@@ -32,7 +32,7 @@ const energy = (ms) => {
 };
 
 const rows = cues
-  .filter((cue) => cue.accent && cue.accent !== "stop")
+  .filter((cue) => cue.accent && cue.accent !== "silence")
   .map((cue) => {
     const frame = Math.round(cue.time * video.fps);
     const near = [-3, -2, -1, 0, 1, 2, 3].map((offset) => change[frame + offset] ?? 0);
