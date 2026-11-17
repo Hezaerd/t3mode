@@ -36,7 +36,7 @@ export class AsarArchive extends Context.Service<
     readonly inspect: (archive: string) => Effect.Effect<ArchiveKind, CliFailure>;
     readonly pack: (sourceDir: string, archive: string) => Effect.Effect<void, CliFailure>;
   }
->()("@t3mode/cli/Asar/AsarArchive") {}
+>()("t3mode/Asar/AsarArchive") {}
 
 const readRootFile = (archive: string, file: string) =>
   Effect.try({
