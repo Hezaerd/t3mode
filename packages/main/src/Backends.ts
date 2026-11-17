@@ -1,455 +1,81 @@
 // Plugin backends: one Electron utilityProcess per enabled plugin with a `backend` script (see
-// "Backends" in docs/architecture.md). The reconcile tells `apply` which backends should run; this
-// module starts, stops and restarts them, carries messages between each one and the page, and
-// writes each one's output to its own log. It routes by the plugin id of the process it spawned.
+// "Backends" in docs/architecture.md). The rules live in BackendSupervisor.ts; this module gives
+// them Electron's utilityProcess, the plugin's data folder and its log file.
 // @effect-diagnostics nodeBuiltinImport:off
-// @effect-diagnostics globalDate:off - driven by Electron process events, outside any fiber
-// @effect-diagnostics globalTimers:off - restart delays outlive the calls that set them
 import * as NodeFs from "node:fs";
 import * as NodePath from "node:path";
-import * as NodeReadline from "node:readline";
 
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Schema from "effect/Schema";
 
-import { app, utilityProcess, type UtilityProcess, type WebContents } from "electron";
+import { app, utilityProcess } from "electron";
 
+import { BackendEnv } from "@t3mode/shared/Backends";
+import type { HomeLayout } from "@t3mode/shared/Layout";
+
+import { openBackendLog } from "./BackendLog.ts";
 import {
-  BACKEND_CRASH_WINDOW_MS,
-  BACKEND_MAX_CRASHES,
-  BackendEnv,
-  type BackendEvent,
-  type BackendStatus,
-  type FromBackendHost,
-  type ToBackendHost,
-  backendRetryDelay,
-} from "@t3mode/shared/Backends";
-import { Channel } from "@t3mode/shared/Ipc";
-import { PluginIdSchema } from "@t3mode/shared/PluginStore";
-
+  type BackendProcess,
+  type Supervisor,
+  type WantedBackend,
+  makeSupervisor,
+} from "./BackendSupervisor.ts";
 import { Home } from "./Home.ts";
 
-/** What one reconcile wants running for a plugin. */
-export interface WantedBackend {
-  readonly id: string;
-  /** The plugin's folder: the process's working directory. */
-  readonly folder: string;
-  /** The backend script's absolute path. */
-  readonly script: string;
-  /** Changes when the plugin's files change, so the backend restarts on an update or rebuild. */
-  readonly version: string;
-}
+export type { WantedBackend } from "./BackendSupervisor.ts";
 
-/** A backend process main started, and what it runs. */
-interface Running {
-  readonly child: UtilityProcess;
-  readonly runs: WantedBackend;
-  /** The plugin's `start` returned. */
-  ready: boolean;
-  /** Main asked it to exit, so its exit isn't a crash. */
-  stopping: boolean;
-  /**
-   * The crash reason: the first line of the host's `[fatal]` report, or else the last line the
-   * backend wrote to stderr.
-   */
-  lastError: string;
-  fatal: boolean;
-  readonly exited: Promise<void>;
-}
+export class Backends extends Context.Service<Backends, Supervisor>()("@t3mode/main/Backends") {}
 
-/** Main's record of one plugin's backend. */
-interface Slot {
-  readonly id: string;
-  /** From the last reconcile. Undefined: it shouldn't run (disabled, removed, no backend). */
-  wanted: WantedBackend | undefined;
-  /**
-   * A reconcile checked `wanted` since the backend last stopped. A restart after a crash or a
-   * Retry waits for one, so it never runs files that changed on disk since their pins were checked.
-   */
-  checked: boolean;
-  running: Running | undefined;
-  /** Crash times within the crash window, oldest first. */
-  crashes: Array<number>;
-  /** A restart waiting for its backoff delay. */
-  retry: { readonly timer: ReturnType<typeof setTimeout>; readonly at: number } | undefined;
-  /** It crashed too often, and stays down until a retry or the next enable. */
-  failed: string | undefined;
-  lastCrash: string;
-  /** Updates and removes in progress, which keep it stopped while they replace its files. */
-  holds: number;
-  /** The last status sent to pages, to send only changes. */
-  sent: string;
-}
-
-export const BackendActionSchema = Schema.Union([
-  Schema.TaggedStruct("subscribe", {}),
-  Schema.TaggedStruct("send", { plugin: PluginIdSchema, data: Schema.Unknown }),
-  Schema.TaggedStruct("retry", { plugin: PluginIdSchema }),
-]);
-
-export class Backends extends Context.Service<
-  Backends,
-  {
-    /** Runs exactly these backends: starts, stops and restarts to match. */
-    readonly apply: (wanted: ReadonlyArray<WantedBackend>) => Effect.Effect<void>;
-    /**
-     * Stops a plugin's backend and keeps it stopped until `release`, waiting for it to exit. False
-     * when it was still running after the wait.
-     */
-    readonly hold: (id: string) => Effect.Effect<boolean>;
-    readonly release: (id: string) => Effect.Effect<void>;
-    /** A BackendAction from the page. */
-    readonly act: (
-      input: unknown,
-      sender: WebContents,
-    ) => Effect.Effect<unknown, Schema.SchemaError>;
-    /** Kills every backend now and starts none again. For quitting. */
-    readonly stopAll: Effect.Effect<void>;
-    /** The reconcile to run before a restart: it checks the plugin's files again and calls `apply`. */
-    readonly setRecheck: (recheck: Effect.Effect<void>) => void;
-  }
->()("@t3mode/main/Backends") {}
-
-/** A log over this size is moved to `<id>.old.log` when the backend starts. */
-const MAX_LOG_BYTES = 2 * 1024 * 1024;
-/** How the backend host starts its report of an error the plugin left uncaught. */
-const FATAL_PREFIX = "[fatal] ";
-/** How long `hold` waits for a backend to exit. */
-const EXIT_TIMEOUT_MS = 5_000;
-
-const statusOf = (slot: Slot): BackendStatus | null => {
-  if (slot.running) return { state: slot.running.ready ? "running" : "starting" };
-  if (slot.wanted && !slot.checked && slot.holds === 0) return { state: "starting" };
-  if (slot.failed !== undefined) {
-    return { state: "failed", crashes: slot.crashes.length, error: slot.failed };
-  }
-  if (slot.retry) {
-    return {
-      state: "restarting",
-      crashes: slot.crashes.length,
-      error: slot.lastCrash,
-      retryAt: slot.retry.at,
-    };
-  }
-  return null;
-};
-
-const kill = (running: Running) => {
-  running.stopping = true;
-  running.child.kill();
-};
-
-const sameBackend = (a: WantedBackend, b: WantedBackend) =>
-  a.script === b.script && a.folder === b.folder && a.version === b.version;
-
-export const make = Effect.gen(function* () {
-  const { layout } = yield* Home;
-  const run = Effect.runForkWith(yield* Effect.context<never>());
-  const slots = new Map<string, Slot>();
-  const pages = new Set<WebContents>();
-  let quitting = false;
-  let recheck: Effect.Effect<void> = Effect.void;
-  /** Starts this slot again once a reconcile has checked its files. */
-  const restart = (slot: Slot) => {
-    slot.checked = false;
-    emit(slot);
-    run(recheck);
-  };
-
-  const slotOf = (id: string): Slot => {
-    let slot = slots.get(id);
-    if (!slot) {
-      slot = {
-        id,
-        wanted: undefined,
-        checked: false,
-        running: undefined,
-        crashes: [],
-        retry: undefined,
-        failed: undefined,
-        lastCrash: "",
-        holds: 0,
-        sent: "null",
-      };
-      slots.set(id, slot);
-    }
-    return slot;
-  };
-
-  const broadcast = (event: BackendEvent) => {
-    for (const page of pages) {
-      if (page.isDestroyed()) pages.delete(page);
-      else page.send(Channel.backendEvent, event);
-    }
-  };
-
-  const emit = (slot: Slot) => {
-    const status = statusOf(slot);
-    const text = JSON.stringify(status);
-    if (text === slot.sent) return;
-    slot.sent = text;
-    broadcast({ _tag: "status", plugin: slot.id, status });
-  };
-
-  const openLog = (id: string) => {
-    const file = NodePath.join(layout.pluginLogs, `${id}.log`);
-    NodeFs.mkdirSync(layout.pluginLogs, { recursive: true });
-    try {
-      if (NodeFs.statSync(file).size > MAX_LOG_BYTES) {
-        NodeFs.renameSync(file, NodePath.join(layout.pluginLogs, `${id}.old.log`));
-      }
-    } catch {
-      // No log yet.
-    }
-    const stream = NodeFs.createWriteStream(file, { flags: "a" });
-    stream.on("error", () => undefined);
-    return {
-      write: (line: string) => {
-        if (!stream.writableEnded) stream.write(`${new Date().toISOString()} ${line}\n`);
-      },
-      close: () => stream.end(),
-    };
-  };
-
-  const start = (slot: Slot, wanted: WantedBackend) => {
-    const log = openLog(slot.id);
-    const { write } = log;
-    const dataDir = NodePath.join(layout.pluginData, slot.id);
+const spawnUtility =
+  (layout: HomeLayout) =>
+  (wanted: WantedBackend): BackendProcess => {
+    const dataDir = NodePath.join(layout.pluginData, wanted.id);
     NodeFs.mkdirSync(dataDir, { recursive: true });
-    // The script goes in the environment: a utility process's command line doesn't carry arguments.
+    // The script goes in the environment: a utility process's command line doesn't carry
+    // arguments, so command-line matching can't find a backend. Only main stops one.
     const child = utilityProcess.fork(layout.backendHost, [], {
-      serviceName: `t3mode plugin ${slot.id}`,
+      serviceName: `t3mode plugin ${wanted.id}`,
       stdio: "pipe",
       cwd: wanted.folder,
       env: {
         ...process.env,
-        [BackendEnv.plugin]: slot.id,
+        [BackendEnv.plugin]: wanted.id,
         [BackendEnv.script]: wanted.script,
         [BackendEnv.data]: dataDir,
       },
     });
-    const exited = Promise.withResolvers<void>();
-    const running: Running = {
-      child,
-      runs: wanted,
-      ready: false,
-      stopping: false,
-      lastError: "",
-      fatal: false,
-      exited: exited.promise,
-    };
-    slot.running = running;
-    write(`starting ${wanted.script}`);
-    // The log closes once the process has exited and both pipes have drained.
-    let open = 1;
-    const closeOne = () => {
-      open--;
-      if (open === 0) log.close();
-    };
-    for (const [stream, prefix] of [
-      [child.stdout, ""],
-      [child.stderr, "stderr "],
-    ] as const) {
-      if (!stream) continue;
-      open++;
-      const lines = NodeReadline.createInterface({ input: stream });
-      lines.on("close", closeOne);
-      lines.on("line", (line) => {
-        write(`${prefix}${line}`);
-        if (prefix === "" || line.trim() === "" || running.fatal) return;
-        running.fatal = line.startsWith(FATAL_PREFIX);
-        running.lastError = running.fatal ? line.slice(FATAL_PREFIX.length) : line;
-      });
-    }
-    child.on("spawn", () => write(`started, pid ${child.pid ?? "unknown"}`));
-    child.on("message", (message: FromBackendHost) => {
-      if (slot.running !== running || typeof message !== "object" || message === null) return;
-      if (message._tag === "ready") {
-        running.ready = true;
-        emit(slot);
-      } else if (message._tag === "message") {
-        broadcast({ _tag: "message", plugin: slot.id, data: message.data });
-      }
-    });
-    child.on("exit", (code) => {
-      write(`exited with code ${code}`);
-      closeOne();
-      exited.resolve();
-      if (slot.running !== running) return;
-      slot.running = undefined;
-      if (!running.stopping && !quitting)
-        crashed(slot, running.lastError || `exited with code ${code}`);
-      settle(slot);
-    });
-    emit(slot);
-  };
-
-  const crashed = (slot: Slot, error: string) => {
-    const now = Date.now();
-    slot.crashes = [...slot.crashes.filter((at) => now - at < BACKEND_CRASH_WINDOW_MS), now];
-    slot.lastCrash = error;
-    if (slot.crashes.length >= BACKEND_MAX_CRASHES) {
-      slot.failed = error;
-      run(
-        Effect.logError(
-          `Backend of ${slot.id} crashed ${slot.crashes.length} times; it stays stopped`,
-          { error },
-        ),
-      );
-      return;
-    }
-    const delay = backendRetryDelay(slot.crashes.length);
-    run(Effect.logWarning(`Backend of ${slot.id} crashed; restarting in ${delay} ms`, { error }));
-    slot.retry = {
-      at: now + delay,
-      timer: setTimeout(() => {
-        slot.retry = undefined;
-        restart(slot);
-      }, delay),
+    return {
+      pid: () => child.pid,
+      stdout: child.stdout,
+      stderr: child.stderr,
+      // A utility process's port, not a window: there is no origin to name.
+      // eslint-disable-next-line unicorn/require-post-message-target-origin
+      postMessage: (message) => child.postMessage(message),
+      kill: () => {
+        child.kill();
+      },
+      onSpawn: (listener) => {
+        child.on("spawn", listener);
+      },
+      onMessage: (listener) => {
+        child.on("message", listener);
+      },
+      onExit: (listener) => {
+        child.on("exit", listener);
+      },
     };
   };
 
-  /** Brings one slot in line with what is wanted, then tells the pages. */
-  const settle = (slot: Slot) => {
-    const { wanted, running } = slot;
-    if (!wanted) {
-      if (slot.retry) clearTimeout(slot.retry.timer);
-      slot.retry = undefined;
-      slot.failed = undefined;
-      slot.crashes = [];
-    }
-    if (running) {
-      const keep = wanted && slot.holds === 0 && !quitting && sameBackend(running.runs, wanted);
-      if (!keep && !running.stopping) kill(running);
-    } else if (
-      wanted &&
-      slot.checked &&
-      slot.holds === 0 &&
-      !quitting &&
-      slot.failed === undefined &&
-      slot.retry === undefined
-    ) {
-      try {
-        start(slot, wanted);
-      } catch (error) {
-        crashed(slot, `could not start: ${String(error)}`);
-      }
-    }
-    emit(slot);
-  };
-
-  const apply = Effect.fn("Backends.apply")(function* (wanted: ReadonlyArray<WantedBackend>) {
-    yield* Effect.sync(() => {
-      if (!app.isReady()) return;
-      const byId = new Map(wanted.map((backend) => [backend.id, backend]));
-      for (const id of byId.keys()) slotOf(id);
-      for (const slot of slots.values()) {
-        const next = byId.get(slot.id);
-        // A new version starts with a clean crash record.
-        if (next && slot.wanted && !sameBackend(next, slot.wanted)) {
-          slot.failed = undefined;
-          slot.crashes = [];
-        }
-        slot.wanted = next;
-        slot.checked = next !== undefined;
-        settle(slot);
-      }
-    });
-  });
-
-  const hold = Effect.fn("Backends.hold")(function* (id: string) {
-    const running = yield* Effect.sync(() => {
-      const slot = slotOf(id);
-      slot.holds++;
-      const current = slot.running;
-      settle(slot);
-      return current;
-    });
-    if (!running) return true;
-    return yield* Effect.promise(() =>
-      Promise.race([
-        running.exited.then(() => true),
-        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), EXIT_TIMEOUT_MS)),
-      ]),
-    );
-  });
-
-  // The files changed or are gone: the next reconcile says what runs now.
-  const release = Effect.fn("Backends.release")(function* (id: string) {
-    yield* Effect.sync(() => {
-      const slot = slotOf(id);
-      slot.holds = Math.max(0, slot.holds - 1);
-      if (slot.holds === 0) {
-        slot.wanted = undefined;
-        slot.checked = false;
-      }
-      settle(slot);
-    });
-  });
-
-  const act = Effect.fn("Backends.act")(function* (input: unknown, sender: WebContents) {
-    const action = yield* Schema.decodeUnknownEffect(BackendActionSchema)(input);
-    return yield* Effect.sync(() => {
-      switch (action._tag) {
-        case "subscribe": {
-          pages.add(sender);
-          for (const slot of slots.values()) {
-            const status = statusOf(slot);
-            if (status)
-              sender.send(Channel.backendEvent, { _tag: "status", plugin: slot.id, status });
-          }
-          return true;
-        }
-        case "send": {
-          const running = slots.get(action.plugin)?.running;
-          if (!running || running.stopping) return false;
-          // A utility process's port, not a window: there is no origin to name.
-          // eslint-disable-next-line unicorn/require-post-message-target-origin
-          running.child.postMessage({ _tag: "message", data: action.data } satisfies ToBackendHost);
-          return true;
-        }
-        case "retry": {
-          const slot = slotOf(action.plugin);
-          if (slot.retry) clearTimeout(slot.retry.timer);
-          slot.retry = undefined;
-          slot.failed = undefined;
-          slot.crashes = [];
-          restart(slot);
-          return true;
-        }
-      }
-    });
-  });
-
-  const stopAll = Effect.gen(function* () {
-    const stopped = yield* Effect.sync(() => {
-      quitting = true;
-      let count = 0;
-      for (const slot of slots.values()) {
-        if (slot.retry) clearTimeout(slot.retry.timer);
-        slot.retry = undefined;
-        if (slot.running && !slot.running.stopping) {
-          kill(slot.running);
-          count++;
-        }
-      }
-      return count;
-    });
-    if (stopped > 0) yield* Effect.logInfo(`Stopped ${stopped} plugin backend(s) for quit`);
-  });
-
-  return Backends.of({
-    apply,
-    hold,
-    release,
-    act,
-    stopAll,
-    setRecheck: (next) => {
-      recheck = next;
-    },
-  });
+export const make = Effect.gen(function* () {
+  const { layout } = yield* Home;
+  return Backends.of(
+    yield* makeSupervisor({
+      spawn: spawnUtility(layout),
+      openLog: (id) => openBackendLog(layout.pluginLogs, id),
+      isReady: () => app.isReady(),
+    }),
+  );
 });
 
 export const layer = Layer.effect(Backends, make);

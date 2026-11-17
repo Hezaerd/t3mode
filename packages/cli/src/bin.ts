@@ -307,6 +307,10 @@ const pluginStore = Effect.gen(function* () {
   const t3 = yield* Target.resolve(flags).pipe(Effect.option);
   const exe = Option.map(t3, (t) => t.exe);
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  // Set once the store exists; the stop hook below runs only after that.
+  let installedPrograms: Effect.Effect<ReadonlyArray<PluginStore.PluginProgram>> = Effect.succeed(
+    [],
+  );
   const store = yield* PluginStore.make({
     layout,
     githubBase: githubUrl(process.env),
@@ -316,10 +320,14 @@ const pluginStore = Effect.gen(function* () {
           // while it replaces the plugin's files.
           stopProcesses: Effect.fn("stopProcesses")(
             function* (id: string, folder: string, backend: boolean) {
-              if (
-                backend &&
-                (yield* Processes.countRunningIn(t3.value.installDir, [layout.plugins])) > 0
-              ) {
+              // Tool servers, from <home>/plugins or a linked folder, run T3 Code's exe without it.
+              const folders = [
+                layout.plugins,
+                ...(yield* installedPrograms)
+                  .filter((program) => program.linked)
+                  .map((program) => program.folder),
+              ];
+              if (backend && (yield* Processes.countRunningIn(t3.value.installDir, folders)) > 0) {
                 return yield* new PluginStore.PluginError({
                   message: `${id} runs a backend inside T3 Code. Update or remove it from T3 Code's Plugins page, or close T3 Code first.`,
                 });
@@ -335,6 +343,7 @@ const pluginStore = Effect.gen(function* () {
         }
       : {}),
   });
+  installedPrograms = store.programs;
   const refresh = Option.isSome(exe)
     ? store.programs.pipe(
         Effect.flatMap((programs) =>

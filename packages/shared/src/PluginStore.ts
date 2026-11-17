@@ -636,7 +636,6 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
     const hashes: Record<string, string> = {};
     for (const [name, bytes] of Object.entries(files)) hashes[name] = yield* sha256Hex(bytes);
     // After the downloads, so the plugin's programs are down for as short a time as possible.
-    const resume = yield* stopProcesses(manifest.id, previous);
     const entry: LockEntry = {
       source,
       version: manifest.version,
@@ -646,18 +645,24 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
       ...(manifest.mcp === undefined ? {} : { mcp: manifest.mcp }),
       approved: access,
     };
-    yield* Effect.gen(function* () {
-      yield* writeCodeThenManifestThenLock(manifest.id, files, manifestBytes, {
-        ...current,
-        plugins: { ...current.plugins, [manifest.id]: entry },
-      });
-      for (const name of Object.keys(previous?.files ?? {})) {
-        if (!Object.hasOwn(files, name))
-          yield* fs
-            .remove(path.join(layout.plugins, manifest.id, name), { force: true })
-            .pipe(Effect.mapError(fail(`Could not delete ${name}.`)));
-      }
-    }).pipe(Effect.ensuring(resume));
+    // Acquired without interruption, so a stop that happened always gets its resume step.
+    yield* Effect.acquireUseRelease(
+      stopProcesses(manifest.id, previous),
+      () =>
+        Effect.gen(function* () {
+          yield* writeCodeThenManifestThenLock(manifest.id, files, manifestBytes, {
+            ...current,
+            plugins: { ...current.plugins, [manifest.id]: entry },
+          });
+          for (const name of Object.keys(previous?.files ?? {})) {
+            if (!Object.hasOwn(files, name))
+              yield* fs
+                .remove(path.join(layout.plugins, manifest.id, name), { force: true })
+                .pipe(Effect.mapError(fail(`Could not delete ${name}.`)));
+          }
+        }),
+      (resume) => resume,
+    );
     yield* Effect.logInfo(`Installed ${manifest.id} ${manifest.version} from ${release}`);
     return (yield* inspect(manifest.id, entry)).plugin;
   });
@@ -750,22 +755,26 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
       Object.entries(current.plugins).filter(([key]) => key !== id),
     );
     // The folder goes first: when it can't be deleted, the plugin stays listed and remove can run again.
-    const resume = yield* stopProcesses(id, entry);
-    yield* Effect.gen(function* () {
-      if (entry.source.kind === "github") {
-        yield* fs
-          .remove(path.join(layout.plugins, id), { recursive: true, force: true })
-          .pipe(Effect.mapError(fail(`Could not delete ${path.join(layout.plugins, id)}.`)));
-      }
-      yield* writeLock({ ...current, plugins });
-      // Page storage, then the backend's data folder.
-      yield* fs
-        .remove(path.join(layout.pluginData, `${id}.json`), { force: true })
-        .pipe(Effect.mapError(fail(`Could not delete data for ${id}.`)));
-      yield* fs
-        .remove(path.join(layout.pluginData, id), { recursive: true, force: true })
-        .pipe(Effect.mapError(fail(`Could not delete the data folder of ${id}.`)));
-    }).pipe(Effect.ensuring(resume));
+    yield* Effect.acquireUseRelease(
+      stopProcesses(id, entry),
+      () =>
+        Effect.gen(function* () {
+          if (entry.source.kind === "github") {
+            yield* fs
+              .remove(path.join(layout.plugins, id), { recursive: true, force: true })
+              .pipe(Effect.mapError(fail(`Could not delete ${path.join(layout.plugins, id)}.`)));
+          }
+          yield* writeLock({ ...current, plugins });
+          // Page storage, then the backend's data folder.
+          yield* fs
+            .remove(path.join(layout.pluginData, `${id}.json`), { force: true })
+            .pipe(Effect.mapError(fail(`Could not delete data for ${id}.`)));
+          yield* fs
+            .remove(path.join(layout.pluginData, id), { recursive: true, force: true })
+            .pipe(Effect.mapError(fail(`Could not delete the data folder of ${id}.`)));
+        }),
+      (resume) => resume,
+    );
     yield* Effect.logInfo(`Removed ${id}`);
     return "removed" as const;
   }, withLock);
