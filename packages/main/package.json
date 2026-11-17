@@ -9,6 +9,7 @@
   },
   "devDependencies": {
     "@effect/platform-node": "catalog:",
+    "@t3mode/plugin-sdk": "workspace:*",
     "@t3mode/shared": "workspace:*",
     "@types/node": "catalog:",
     "effect": "catalog:",
