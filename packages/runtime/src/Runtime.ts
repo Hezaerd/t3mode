@@ -17,7 +17,6 @@ import type { PluginSettings, Settings } from "@t3mode/shared/Settings";
 import type { ShortcutAction, ShortcutStatus } from "@t3mode/shared/Shortcut";
 import type { UpdateAction, UpdateStatus } from "@t3mode/shared/Updates";
 
-import { localSockets } from "./LocalSockets.ts";
 import { pluginStorage } from "./PluginStorage.ts";
 import { queryFirst } from "./dom.ts";
 import { findHookState, findPropsUp } from "./lib/react.ts";
@@ -95,7 +94,6 @@ export const optionValues = (
 
 export class Runtime {
   readonly #native: NativeBridge;
-  readonly #connect: ReturnType<typeof localSockets>;
   readonly #data = new Map<string, Record<string, unknown>>();
   readonly #storage: ReturnType<typeof pluginStorage>;
   readonly #entries = new Map<string, Entry>();
@@ -119,7 +117,6 @@ export class Runtime {
     pluginData: PluginDataSnapshot,
   ) {
     this.#native = native;
-    this.#connect = localSockets(native);
     for (const [id, data] of Object.entries(pluginData.data)) this.#data.set(id, { ...data });
     const separator = info.home.includes("\\") ? "\\" : "/";
     this.#storage = pluginStorage(
@@ -561,7 +558,6 @@ export class Runtime {
 
     const api: PluginApi = {
       id,
-      sockets: { connect: (name) => this.#connect(id, name, alive, guard, add) },
       options: optionValues(
         definition.options,
         storedOptions ?? this.#settings.plugins[id]?.options,

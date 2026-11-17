@@ -1024,9 +1024,6 @@ export class SettingsPage {
         plugin.name,
         null,
         group(
-          ...(plugin.sockets
-            ? [row({ description: `Can connect to local sockets: ${plugin.sockets.join(", ")}` })]
-            : []),
           row({ title: "Enabled", description: plugin.description, control: toggle }),
           row({
             title: "Status",

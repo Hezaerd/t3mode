@@ -76,7 +76,7 @@ const setup = () => {
         children.push(child);
         return child;
       },
-      openLog: () => ({ write: () => undefined, close: () => undefined }),
+      openLog: () => ({ write: () => undefined, flush: () => undefined, close: () => undefined }),
       isReady: () => true,
     }),
   );
@@ -320,7 +320,7 @@ describe("messages", () => {
         spawn: () => {
           throw new Error("no exe");
         },
-        openLog: () => ({ write: () => undefined, close: () => undefined }),
+        openLog: () => ({ write: () => undefined, flush: () => undefined, close: () => undefined }),
         isReady: () => true,
       }),
     );

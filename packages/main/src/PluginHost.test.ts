@@ -31,7 +31,7 @@ describe("PluginActionSchema", () => {
         _tag: "install",
         source: { kind: "github", owner: "owner", repo: "repo", tag: "v1.0.0" },
         id: "my-plugin",
-        approved: { backend: false, mcp: false, sockets: [] },
+        approved: { backend: false, mcp: false },
       },
       { _tag: "update", id: "my-plugin" },
       { _tag: "remove", id: "my-plugin" },
@@ -45,7 +45,7 @@ describe("PluginActionSchema", () => {
       _tag: "install",
       source: { kind: "github", owner: "owner", repo: "repo", plugin: "alpha" },
       id: "alpha",
-      approved: { backend: false, mcp: false, sockets: [] },
+      approved: { backend: false, mcp: false },
     };
     expect(decode(action)).toEqual(action);
     expect(() =>
@@ -59,7 +59,7 @@ describe("PluginActionSchema", () => {
         _tag: "install",
         source: { kind: "local", path: "C:/Users" },
         id: "my-plugin",
-        approved: { backend: false, mcp: false, sockets: [] },
+        approved: { backend: false, mcp: false },
       }),
     ).toThrow();
   });

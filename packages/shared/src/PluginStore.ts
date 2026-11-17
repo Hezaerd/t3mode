@@ -45,7 +45,6 @@ import {
   PLUGIN_API_VERSION,
   PLUGIN_FILES,
   PLUGIN_ID_PATTERN,
-  SOCKET_ALLOW_PATTERN,
   type PluginPreview,
   type RemoveResult,
   pluginScriptName,
@@ -57,10 +56,11 @@ import {
 } from "./Plugins.ts";
 import { compareVersions, parseVersion } from "./Semver.ts";
 
+// Struct decoding drops keys it doesn't name, so an `approved.sockets` from an older lockfile
+// and a `sockets` in an older manifest still decode.
 export const AccessSchema = Schema.Struct({
   backend: Schema.Boolean,
   mcp: Schema.Boolean,
-  sockets: Schema.Array(Schema.String.check(Schema.isPattern(SOCKET_ALLOW_PATTERN))),
 });
 
 export class PluginError extends Schema.TaggedError<PluginError>()("PluginError", {
@@ -101,9 +101,6 @@ export const ManifestSchema = Schema.Struct({
   backend: Schema.optionalKey(matching(isPluginScript, "a JavaScript file name")),
   mcp: Schema.optionalKey(matching(isPluginScript, "a JavaScript file name")),
   files: Schema.optionalKey(Schema.Array(matching(isPluginFile, "an extra file name"))),
-  sockets: Schema.optionalKey(
-    Schema.Array(Schema.String.check(Schema.isPattern(SOCKET_ALLOW_PATTERN))),
-  ),
 }).check(
   Schema.makeFilter((manifest) => extraFiles(manifest).length <= MAX_PLUGIN_EXTRA_FILES, {
     expected: "at most 20 extra files",
@@ -421,7 +418,6 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
     const manifest = decoded.success;
     const described: InstalledPlugin = {
       ...base,
-      ...(manifest.sockets === undefined ? {} : { sockets: manifest.sockets }),
       name: manifest.name,
       description: manifest.description,
       version: manifest.version,

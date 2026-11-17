@@ -1,6 +1,6 @@
 {
   "name": "t3mode",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Install t3mode, the plugin loader for the T3 Code desktop app, and manage its plugins",
   "license": "MIT",
   "repository": {

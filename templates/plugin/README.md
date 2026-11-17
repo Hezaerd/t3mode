@@ -6,7 +6,7 @@ A starting point for a [t3mode](https://github.com/Hezaerd/t3mode) plugin. This 
 
 Edit `manifest.json`. The `id` is lowercase letters, digits and hyphens, and must never change once people install the plugin. `api` is the plugin API version the SDK targets.
 
-For Windows local sockets, declare optional `"sockets": ["my-pipe", "my-prefix-*"]` in the manifest before calling `api.sockets.connect(name)`. Names use 1 to 100 letters, digits, dots, underscores or hyphens, start with a letter or digit, and take one optional trailing `*` for a prefix. Users see these declarations before installing. Connections close when the plugin stops.
+For work page code can't do, such as opening a Windows named pipe or loading a native module, give the plugin a backend: name a script in the manifest's `"backend"`, default-export `defineBackend({ start })` from it, have the build write it to `dist/` too, and talk to it with `api.backend`. Users approve a backend before installing.
 
 Write the plugin in `src/index.ts`. `definePlugin` and the API types come from `@t3mode/plugin-sdk`. Read the plugin rules in t3mode's `docs/architecture.md` first. Do the plugin's work in `start`, through the API, so turning the plugin off undoes it. t3mode runs none of a plugin's code while it is off.
 
