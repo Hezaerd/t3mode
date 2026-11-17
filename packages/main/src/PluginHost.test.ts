@@ -92,10 +92,11 @@ const build = (layout: ReturnType<typeof homeLayout>) =>
             Backends,
             Backends.of({
               apply: () => Effect.void,
-              hold: () => Effect.void,
+              hold: () => Effect.succeed(true),
               release: () => Effect.void,
               act: () => Effect.succeed(true),
               stopAll: Effect.void,
+              setRecheck: () => undefined,
             }),
           ),
         ),

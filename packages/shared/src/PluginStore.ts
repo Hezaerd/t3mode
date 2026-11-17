@@ -196,8 +196,9 @@ export interface PluginStoreOptions {
   readonly githubBase: string;
   /**
    * Stops a plugin's processes, so its files can be replaced or deleted (Windows keeps a loaded
-   * `.node` file locked). Called before an update writes and before a remove deletes, for GitHub
-   * plugins with a tool server or backend; `backend` says whether the installed version has one.
+   * `.node` file locked). Called before an update writes and before a remove deletes, for plugins
+   * with a backend and GitHub plugins with a tool server; `backend` says whether the installed
+   * version has one.
    * It returns what to run once the files are written or deleted, whatever the outcome. Defaults
    * to doing nothing.
    */
@@ -386,11 +387,12 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
   const folderOf = (id: string, entry: LockEntry) =>
     entry.source.kind === "github" ? path.join(layout.plugins, id) : entry.source.path;
 
+  // A linked plugin's folder is never written or deleted, but its backend's data folder is.
   const stopProcesses = (id: string, entry: LockEntry | undefined) =>
-    entry?.source.kind === "github" &&
-    (entry.mcp !== undefined || entry.backend !== undefined) &&
-    options.stopProcesses
-      ? options.stopProcesses(id, path.join(layout.plugins, id), entry.backend !== undefined)
+    entry &&
+    options.stopProcesses &&
+    (entry.backend !== undefined || (entry.source.kind === "github" && entry.mcp !== undefined))
+      ? options.stopProcesses(id, folderOf(id, entry), entry.backend !== undefined)
       : Effect.succeed(Effect.void);
 
   const inspect = Effect.fn("PluginStore.inspect")(function* (id: string, entry: LockEntry) {
@@ -475,8 +477,17 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
     if ((yield* inspect(id, entry)).plugin.error !== undefined) return undefined;
     const folder = folderOf(id, entry);
     const linked = entry.source.kind === "local";
-    const mcp = yield* programScript(folder, entry, entry.mcp);
-    const backend = yield* programScript(folder, entry, entry.backend);
+    // Install and link record approval with the scripts; this only refuses one that slipped past.
+    const mcp = yield* programScript(
+      folder,
+      entry,
+      entry.approved?.mcp === false ? undefined : entry.mcp,
+    );
+    const backend = yield* programScript(
+      folder,
+      entry,
+      entry.approved?.backend === false ? undefined : entry.backend,
+    );
     if (mcp === undefined && backend === undefined) return undefined;
     const modified =
       linked && backend !== undefined

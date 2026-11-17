@@ -122,6 +122,9 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  // A backend restarting after a crash or a Retry waits for this reconcile to check its files.
+  backends.setRecheck(refresh);
+
   return Reconcile.of({
     refresh,
     start: Effect.sync(() => {

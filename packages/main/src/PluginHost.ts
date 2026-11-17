@@ -74,13 +74,23 @@ export const make = Effect.gen(function* () {
     // The backend stays down until the reconcile after the update or remove; tool servers run
     // again when Claude or Codex next start them.
     stopProcesses: (id, folder) =>
-      backends
-        .hold(id)
-        .pipe(
-          Effect.andThen(PluginProcesses.stop([folder])),
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.as(backends.release(id)),
+      backends.hold(id).pipe(
+        Effect.flatMap((stopped) =>
+          stopped
+            ? PluginProcesses.stop([folder])
+            : backends.release(id).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    new PluginStore.PluginError({
+                      message: `${id}'s backend didn't stop. Try again, or restart T3 Code.`,
+                    }),
+                  ),
+                ),
+              ),
         ),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.as(backends.release(id)),
+      ),
   });
   let updates: Readonly<Record<string, string>> = {};
 

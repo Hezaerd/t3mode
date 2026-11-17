@@ -147,10 +147,13 @@ export class Runtime {
    * started after this see their backend's status from the first call.
    */
   async followBackends(): Promise<void> {
-    this.#native.onBackendEvent((event) => this.#onBackendEvent(event));
-    await this.#native.backend({ _tag: "subscribe" }).catch((error: unknown) => {
+    try {
+      this.#native.onBackendEvent((event) => this.#onBackendEvent(event));
+      await this.#native.backend({ _tag: "subscribe" });
+    } catch (error) {
+      // An older preload, until T3 Code restarts.
       this.log("warn", `Could not follow plugin backends: ${describe(error)}`);
-    });
+    }
   }
 
   /** The plugin's backend, as main last reported it. Null: none runs. */

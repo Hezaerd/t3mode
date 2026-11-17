@@ -64,6 +64,11 @@ interface Slot {
   readonly id: string;
   /** From the last reconcile. Undefined: it shouldn't run (disabled, removed, no backend). */
   wanted: WantedBackend | undefined;
+  /**
+   * A reconcile checked `wanted` since the backend last stopped. A restart after a crash or a
+   * Retry waits for one, so it never runs files that changed on disk since their pins were checked.
+   */
+  checked: boolean;
   running: Running | undefined;
   /** Crash times within the crash window, oldest first. */
   crashes: Array<number>;
@@ -89,8 +94,11 @@ export class Backends extends Context.Service<
   {
     /** Runs exactly these backends: starts, stops and restarts to match. */
     readonly apply: (wanted: ReadonlyArray<WantedBackend>) => Effect.Effect<void>;
-    /** Stops a plugin's backend and keeps it stopped until `release`, waiting for it to exit. */
-    readonly hold: (id: string) => Effect.Effect<void>;
+    /**
+     * Stops a plugin's backend and keeps it stopped until `release`, waiting for it to exit. False
+     * when it was still running after the wait.
+     */
+    readonly hold: (id: string) => Effect.Effect<boolean>;
     readonly release: (id: string) => Effect.Effect<void>;
     /** A BackendAction from the page. */
     readonly act: (
@@ -99,6 +107,8 @@ export class Backends extends Context.Service<
     ) => Effect.Effect<unknown, Schema.SchemaError>;
     /** Kills every backend now and starts none again. For quitting. */
     readonly stopAll: Effect.Effect<void>;
+    /** The reconcile to run before a restart: it checks the plugin's files again and calls `apply`. */
+    readonly setRecheck: (recheck: Effect.Effect<void>) => void;
   }
 >()("@t3mode/main/Backends") {}
 
@@ -111,6 +121,7 @@ const EXIT_TIMEOUT_MS = 5_000;
 
 const statusOf = (slot: Slot): BackendStatus | null => {
   if (slot.running) return { state: slot.running.ready ? "running" : "starting" };
+  if (slot.wanted && !slot.checked && slot.holds === 0) return { state: "starting" };
   if (slot.failed !== undefined) {
     return { state: "failed", crashes: slot.crashes.length, error: slot.failed };
   }
@@ -139,6 +150,13 @@ export const make = Effect.gen(function* () {
   const slots = new Map<string, Slot>();
   const pages = new Set<WebContents>();
   let quitting = false;
+  let recheck: Effect.Effect<void> = Effect.void;
+  /** Starts this slot again once a reconcile has checked its files. */
+  const restart = (slot: Slot) => {
+    slot.checked = false;
+    emit(slot);
+    run(recheck);
+  };
 
   const slotOf = (id: string): Slot => {
     let slot = slots.get(id);
@@ -146,6 +164,7 @@ export const make = Effect.gen(function* () {
       slot = {
         id,
         wanted: undefined,
+        checked: false,
         running: undefined,
         crashes: [],
         retry: undefined,
@@ -186,14 +205,21 @@ export const make = Effect.gen(function* () {
     }
     const stream = NodeFs.createWriteStream(file, { flags: "a" });
     stream.on("error", () => undefined);
-    return (line: string) => stream.write(`${new Date().toISOString()} ${line}\n`);
+    return {
+      write: (line: string) => {
+        if (!stream.writableEnded) stream.write(`${new Date().toISOString()} ${line}\n`);
+      },
+      close: () => stream.end(),
+    };
   };
 
   const start = (slot: Slot, wanted: WantedBackend) => {
-    const write = openLog(slot.id);
+    const log = openLog(slot.id);
+    const { write } = log;
     const dataDir = NodePath.join(layout.pluginData, slot.id);
     NodeFs.mkdirSync(dataDir, { recursive: true });
-    const child = utilityProcess.fork(layout.backendHost, [wanted.script], {
+    // The script goes in the environment: a utility process's command line doesn't carry arguments.
+    const child = utilityProcess.fork(layout.backendHost, [], {
       serviceName: `t3mode plugin ${slot.id}`,
       stdio: "pipe",
       cwd: wanted.folder,
@@ -216,12 +242,21 @@ export const make = Effect.gen(function* () {
     };
     slot.running = running;
     write(`starting ${wanted.script}`);
+    // The log closes once the process has exited and both pipes have drained.
+    let open = 1;
+    const closeOne = () => {
+      open--;
+      if (open === 0) log.close();
+    };
     for (const [stream, prefix] of [
       [child.stdout, ""],
       [child.stderr, "stderr "],
     ] as const) {
       if (!stream) continue;
-      NodeReadline.createInterface({ input: stream }).on("line", (line) => {
+      open++;
+      const lines = NodeReadline.createInterface({ input: stream });
+      lines.on("close", closeOne);
+      lines.on("line", (line) => {
         write(`${prefix}${line}`);
         if (prefix === "" || line.trim() === "" || running.fatal) return;
         running.fatal = line.startsWith(FATAL_PREFIX);
@@ -240,6 +275,7 @@ export const make = Effect.gen(function* () {
     });
     child.on("exit", (code) => {
       write(`exited with code ${code}`);
+      closeOne();
       exited.resolve();
       if (slot.running !== running) return;
       slot.running = undefined;
@@ -270,7 +306,7 @@ export const make = Effect.gen(function* () {
       at: now + delay,
       timer: setTimeout(() => {
         slot.retry = undefined;
-        settle(slot);
+        restart(slot);
       }, delay),
     };
   };
@@ -289,6 +325,7 @@ export const make = Effect.gen(function* () {
       if (!keep && !running.stopping) kill(running);
     } else if (
       wanted &&
+      slot.checked &&
       slot.holds === 0 &&
       !quitting &&
       slot.failed === undefined &&
@@ -316,6 +353,7 @@ export const make = Effect.gen(function* () {
           slot.crashes = [];
         }
         slot.wanted = next;
+        slot.checked = next !== undefined;
         settle(slot);
       }
     });
@@ -329,11 +367,11 @@ export const make = Effect.gen(function* () {
       settle(slot);
       return current;
     });
-    if (!running) return;
-    yield* Effect.promise(() =>
+    if (!running) return true;
+    return yield* Effect.promise(() =>
       Promise.race([
-        running.exited,
-        new Promise((resolve) => setTimeout(resolve, EXIT_TIMEOUT_MS)),
+        running.exited.then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), EXIT_TIMEOUT_MS)),
       ]),
     );
   });
@@ -343,7 +381,10 @@ export const make = Effect.gen(function* () {
     yield* Effect.sync(() => {
       const slot = slotOf(id);
       slot.holds = Math.max(0, slot.holds - 1);
-      if (slot.holds === 0) slot.wanted = undefined;
+      if (slot.holds === 0) {
+        slot.wanted = undefined;
+        slot.checked = false;
+      }
       settle(slot);
     });
   });
@@ -375,7 +416,7 @@ export const make = Effect.gen(function* () {
           slot.retry = undefined;
           slot.failed = undefined;
           slot.crashes = [];
-          settle(slot);
+          restart(slot);
           return true;
         }
       }
@@ -399,7 +440,16 @@ export const make = Effect.gen(function* () {
     if (stopped > 0) yield* Effect.logInfo(`Stopped ${stopped} plugin backend(s) for quit`);
   });
 
-  return Backends.of({ apply, hold, release, act, stopAll });
+  return Backends.of({
+    apply,
+    hold,
+    release,
+    act,
+    stopAll,
+    setRecheck: (next) => {
+      recheck = next;
+    },
+  });
 });
 
 export const layer = Layer.effect(Backends, make);
