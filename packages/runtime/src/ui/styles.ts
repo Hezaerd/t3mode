@@ -23,6 +23,25 @@ const CSS = `
 /* While t3mode's page is open, React's own page stays mounted but hidden. */
 [data-t3mode-page-open] > :not([data-t3mode-page]) { display: none !important; }
 
+[data-t3mode-page] .t3mode-primary {
+  background: var(--primary); color: var(--primary-foreground); --control-icon-color: var(--primary-foreground);
+}
+[data-t3mode-page] .t3mode-primary:hover { background: color-mix(in oklab, var(--primary) 90%, var(--foreground)); }
+[data-t3mode-page] .t3mode-plugins-section > :first-child { padding-right: 0; }
+[data-t3mode-page] .t3mode-offer { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 12px 16px; }
+[data-t3mode-page] .t3mode-offer + .t3mode-offer { border-top: 1px solid var(--border); }
+[data-t3mode-page] .t3mode-offer-text { min-width: 0; display: flex; flex-direction: column; gap: 6px; overflow-wrap: anywhere; }
+[data-t3mode-page] .t3mode-install-footer { border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 12px; padding: 12px 16px; }
+[data-t3mode-page] .t3mode-install-footer .t3mode-actions { justify-content: flex-end; }
+[data-t3mode-page] .t3mode-install-panel .t3mode-install-error { padding: 0; }
+[data-t3mode-page] .t3mode-card-highlight { animation: t3mode-installed 2.4s ease-out both; }
+@keyframes t3mode-installed {
+  from { box-shadow: 0 0 0 2px var(--ring); background-color: color-mix(in oklab, var(--primary) 18%, var(--card)); }
+  to { box-shadow: 0 0 0 0 transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-t3mode-page] .t3mode-card { animation-duration: 0s !important; }
+}
 [data-t3mode-page] .t3mode-toolbar { display: flex; gap: 8px; align-items: center; }
 [data-t3mode-page] .t3mode-search { flex: 1; width: auto; cursor: text; }
 [data-t3mode-page] .t3mode-search:focus-within {

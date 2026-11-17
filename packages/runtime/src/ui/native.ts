@@ -178,13 +178,18 @@ export const switchControl = (options: {
 export const button = (options: {
   readonly text: string;
   readonly icon?: IconName;
-  readonly variant?: "ghost" | "outline";
+  readonly variant?: "ghost" | "outline" | "primary";
   readonly onClick: () => void;
 }): HTMLButtonElement =>
   h(
     "button",
     {
-      className: options.variant === "outline" ? outlineButton : native.ghostButton,
+      className:
+        options.variant === "outline"
+          ? outlineButton
+          : options.variant === "primary"
+            ? `${native.ghostButton} t3mode-primary`
+            : native.ghostButton,
       attrs: { type: "button", "data-slot": "button" },
       on: { click: options.onClick },
     },
