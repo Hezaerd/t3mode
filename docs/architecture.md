@@ -212,7 +212,7 @@ The entry runs T3 Code's own exe on the script, with `ELECTRON_RUN_AS_NODE=1`. U
 
 - **Ownership.** Each entry also sets `T3MODE_HOME` to the home's root. That variable marks the entry as this home's. t3mode rewrites and removes only its own entries, so the sandbox and the real install share these files without touching each other's entries or the user's.
 - **Taken names.** A name already used by an entry t3mode didn't write is left alone, and the plugin's tools aren't added there. The conflict is logged.
-- **Codex.** `config.toml` is edited as text, and never through `codex mcp`, which rewrites the whole file. Only whole tables named `mcp_servers.t3mode-<id>` that carry this home's marker change, with their subtables. Line endings and the final newline are kept, so adding then removing an entry gives the file back byte for byte.
+- **Codex.** `config.toml` is edited as text, and never through `codex mcp`, which rewrites the whole file. Only whole tables named `mcp_servers.t3mode-<id>` that carry this home's marker change, with their subtables. Comments after a t3mode table belong to what follows and stay. Line endings and the final newline are kept, so adding then removing an entry gives the file back byte for byte.
 - **Claude.** `.claude.json` is written only when its content changes, through a temp file and a rename. A file that doesn't parse is left alone.
 - **Missing providers.** A provider that isn't set up is skipped: no `.claude.json`, or no Codex folder.
 - **When.** Main reconciles the entries at launch, after app ready, and after every settings write. It also reconciles after every install, update and remove from the page. A run with nothing to change writes nothing and starts no process. Safe mode leaves the entries as they are. The CLI reconciles after `plugin add`, `update` and `remove`, and `uninstall` removes this home's entries.
@@ -274,7 +274,7 @@ The runtime calls `load()` inside its fault isolation, so an error in a plugin's
 | `status`    | Also shows a downloaded update waiting to install, and the update helper's last log lines                                                                                |
 | `doctor`    | Check the fuses, original entry, update feed, bundle tokens and runtime DOM hooks                                                                                        |
 
-`install`, `repair` and `uninstall` refuse to run while T3 Code is open (`--wait` waits for it to close). They first stop plugin tool servers running T3 Code's exe, which would otherwise count as T3 Code. `uninstall` also removes this home's tool server entries from Claude's and Codex's config. The new shim is built before anything is moved, and a failed swap puts the original back.
+`install`, `repair` and `uninstall` refuse to run while T3 Code is open (`--wait` waits for it to close). Plugin tool servers running T3 Code's exe don't count as T3 Code. They are stopped once T3 Code itself has closed, so a refused command leaves them running. `uninstall` also removes this home's tool server entries from Claude's and Codex's config. The new shim is built before anything is moved, and a failed swap puts the original back.
 
 **Foreign shims.** If `app.asar` carries a t3mod or Vencord-style marker that isn't ours, `install` refuses and explains, instead of stacking shims.
 
