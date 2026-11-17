@@ -164,7 +164,7 @@ export default definePlugin({
 });
 ```
 
-**Local sockets (removed).** Earlier builds let page code open Windows named pipes that its manifest declared in `sockets`, through main. Main couldn't tell which plugin was calling, because the page is one trust domain, so the allowlist was a weak gate. A backend does that work now, as its plugin's own process. A manifest or lockfile entry that still has `sockets` decodes, and the field is ignored. `api.sockets.connect` stays in the SDK's types, deprecated, and always rejects. No published plugin declared `sockets` when it was removed.
+**Local sockets (removed).** Earlier builds let page code open Windows named pipes that its manifest declared in `sockets`, through main. Main couldn't tell which plugin was calling, because the page is one trust domain, so the allowlist was a weak gate. A backend does that work now, as its plugin's own process. A manifest or lockfile entry that still has `sockets` decodes, and the field is ignored. `api.sockets` is gone from the SDK. No published plugin declared `sockets` when it was removed.
 
 **Monorepos.** A root `t3mode.json` maps plugin ids to built folders.
 

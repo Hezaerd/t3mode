@@ -558,14 +558,6 @@ export class Runtime {
 
     const api: PluginApi = {
       id,
-      sockets: {
-        connect: (name) =>
-          Promise.reject(
-            new Error(
-              `Local sockets were removed from t3mode, so ${name} can't be opened. Use a backend instead.`,
-            ),
-          ),
-      },
       options: optionValues(
         definition.options,
         storedOptions ?? this.#settings.plugins[id]?.options,

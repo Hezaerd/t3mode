@@ -116,41 +116,6 @@ it("shows a plugin's settings panel while it runs and stops a panel that throws"
   expect(runtime.panel("example")).toBeUndefined();
 });
 
-it("rejects a local socket connect, now that the transport is gone", async () => {
-  let api: PluginApi | undefined;
-  vi.stubGlobal("window", {
-    __t3modePlugins: [
-      {
-        id: "example",
-        load: () => ({
-          options: {},
-          start: (started: PluginApi) => {
-            api = started;
-          },
-        }),
-      },
-    ],
-  });
-  const runtime = new Runtime(
-    { ...noBackends, log: vi.fn().mockResolvedValue(undefined) } as unknown as NativeBridge,
-    [
-      {
-        id: "example",
-        name: "Example",
-        description: "",
-        version: "1.0.0",
-        source: { kind: "local", path: "example" },
-      },
-    ],
-    { version: 1, plugins: {} },
-    { t3modeVersion: "1", t3codeVersion: "1", home: "home", logs: "logs", safeMode: false },
-    { data: {}, unreadable: [] },
-  );
-  runtime.startAll();
-  await expect(api?.sockets.connect("probe")).rejects.toThrow("Use a backend instead");
-  expect(runtime.state("example")).toEqual({ kind: "running", report: null });
-});
-
 it("carries backend messages for the plugin's own id and drops its listeners when it stops", async () => {
   let deliver: ((event: BackendEvent) => void) | undefined;
   const backend = vi.fn().mockResolvedValue(true);

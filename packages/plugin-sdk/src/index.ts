@@ -55,15 +55,6 @@ export interface PluginUi {
   readonly button: (options: ButtonOptions) => HTMLButtonElement;
 }
 
-/** @deprecated t3mode no longer opens local sockets from page code. Use a backend. */
-export interface LocalSocket {
-  readonly name: string;
-  write(data: Uint8Array): void;
-  close(): void;
-  onData(callback: (data: Uint8Array) => void): void;
-  onClose(callback: (error?: string) => void): void;
-}
-
 /** A local fixed drive. */
 export interface Disk {
   /** The drive's root, such as `C:\`. */
@@ -104,11 +95,6 @@ export interface PluginBackend {
 export interface PluginApi<O extends OptionsSpec = OptionsSpec> {
   /** The id from the plugin's manifest.json. */
   readonly id: string;
-  /**
-   * @deprecated Removed in t3mode's backends release: `connect` always rejects. Open the socket
-   * from the plugin's backend and talk to it through `backend`.
-   */
-  readonly sockets: { readonly connect: (name: string) => Promise<LocalSocket> };
   readonly options: OptionValues<O>;
   /** Adds a stylesheet, removed when the plugin stops. */
   readonly css: (text: string) => void;
