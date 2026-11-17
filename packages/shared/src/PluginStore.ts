@@ -56,6 +56,7 @@ import {
   wrapPluginCode,
 } from "./Plugins.ts";
 import { compareVersions, parseVersion } from "./Semver.ts";
+import type { ToolServer } from "./ToolServers.ts";
 
 export const AccessSchema = Schema.Struct({
   backend: Schema.Boolean,
@@ -177,6 +178,12 @@ export interface UpdateCheck {
 export interface PluginStoreOptions {
   readonly layout: HomeLayout;
   readonly githubBase: string;
+  /**
+   * Stops the processes running from a plugin's folder, so its files can be replaced or deleted
+   * (Windows keeps a loaded `.node` file locked). Called before an update writes and before a
+   * remove deletes, for plugins with a tool server or backend. Defaults to doing nothing.
+   */
+  readonly stopProcesses?: (folder: string) => Effect.Effect<void, PluginError>;
 }
 
 export class PluginStore extends Context.Service<
@@ -198,6 +205,8 @@ export class PluginStore extends Context.Service<
     readonly remove: (id: string) => Effect.Effect<RemoveResult, PluginError>;
     readonly link: (path: string) => Effect.Effect<ReadonlyArray<InstalledPlugin>, PluginError>;
     readonly checkUpdates: Effect.Effect<UpdateCheck, PluginError>;
+    /** The tool servers of installed GitHub plugins whose pinned files all match. */
+    readonly toolServers: Effect.Effect<ReadonlyArray<ToolServer>>;
   }
 >()("@t3mode/shared/PluginStore") {}
 
@@ -282,7 +291,9 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
       const temp = `${file}.tmp`;
       yield* fs.makeDirectory(path.dirname(file), { recursive: true });
       yield* fs.writeFile(temp, bytes);
-      yield* fs.rename(temp, file);
+      yield* fs
+        .rename(temp, file)
+        .pipe(Effect.tapError(() => fs.remove(temp, { force: true }).pipe(Effect.ignore)));
     },
     Effect.mapError(fail("t3mode could not write to its plugins folder.")),
   );
@@ -349,6 +360,11 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
 
   const folderOf = (id: string, entry: LockEntry) =>
     entry.source.kind === "github" ? path.join(layout.plugins, id) : entry.source.path;
+
+  const stopProcesses = (id: string, entry: LockEntry | undefined) =>
+    entry?.source.kind === "github" && (entry.mcp !== undefined || entry.backend !== undefined)
+      ? (options.stopProcesses?.(path.join(layout.plugins, id)) ?? Effect.void)
+      : Effect.void;
 
   const inspect = Effect.fn("PluginStore.inspect")(function* (id: string, entry: LockEntry) {
     const base: InstalledPlugin = {
@@ -535,6 +551,8 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
     }
     const hashes: Record<string, string> = {};
     for (const [name, bytes] of Object.entries(files)) hashes[name] = yield* sha256Hex(bytes);
+    // After the downloads, so the plugin's tool server is down for as short a time as possible.
+    yield* stopProcesses(manifest.id, previous);
     const entry: LockEntry = {
       source,
       version: manifest.version,
@@ -645,12 +663,14 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
     const plugins = Object.fromEntries(
       Object.entries(current.plugins).filter(([key]) => key !== id),
     );
-    yield* writeLock({ ...current, plugins });
+    // The folder goes first: when it can't be deleted, the plugin stays listed and remove can run again.
+    yield* stopProcesses(id, entry);
     if (entry.source.kind === "github") {
       yield* fs
         .remove(path.join(layout.plugins, id), { recursive: true, force: true })
         .pipe(Effect.mapError(fail(`Could not delete ${path.join(layout.plugins, id)}.`)));
     }
+    yield* writeLock({ ...current, plugins });
     yield* fs
       .remove(path.join(layout.pluginData, `${id}.json`), { force: true })
       .pipe(Effect.mapError(fail(`Could not delete data for ${id}.`)));
@@ -764,6 +784,26 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
     remove,
     link,
     checkUpdates,
+    toolServers: readLock.pipe(
+      Effect.orElseSucceed(() => EMPTY_LOCK),
+      Effect.flatMap((current) =>
+        Effect.forEach(Object.entries(current.plugins), ([id, entry]) =>
+          entry.source.kind !== "github" ||
+          entry.mcp === undefined ||
+          entry.files?.[entry.mcp] === undefined
+            ? Effect.succeed([])
+            : inspect(id, entry).pipe(
+                Effect.map(({ plugin }) =>
+                  plugin.error === undefined
+                    ? [{ id, script: path.join(layout.plugins, id, entry.mcp!) }]
+                    : [],
+                ),
+              ),
+        ),
+      ),
+      Effect.map((servers) => servers.flat()),
+      Effect.withSpan("PluginStore.toolServers"),
+    ),
   });
 });
 

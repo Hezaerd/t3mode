@@ -11,6 +11,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { Argument, Command, Flag, Prompt } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
+import { ChildProcessSpawner } from "effect/process";
 
 import {
   GITHUB_URL_ENV,
@@ -36,6 +37,7 @@ import * as Install from "./Install.ts";
 import * as LegacyHome from "./LegacyHome.ts";
 import * as Processes from "./Processes.ts";
 import * as Target from "./Target.ts";
+import * as ToolServers from "./ToolServers.ts";
 
 const root = Command.make("t3mode").pipe(
   Command.withSharedFlags({
@@ -57,6 +59,8 @@ const target = Effect.gen(function* () {
   return yield* Target.resolve(yield* root);
 });
 
+const pluginsOf = (t: Target.Target) => ({ exe: t.exe, folder: t.home.plugins });
+
 const wait = Flag.Boolean("wait").pipe(
   Flag.withDescription("Wait for T3 Code to close instead of failing"),
   Flag.withDefault(false),
@@ -75,7 +79,7 @@ const describeApply: Record<Install.ApplyResult, string> = {
 const installOrRepair = (withDeploy: boolean) =>
   Effect.fn(function* (options: { readonly wait: boolean; readonly launch: boolean }) {
     const t = yield* target;
-    yield* Processes.ensureClosed(t.installDir, options.wait);
+    yield* Processes.ensureClosed(t.installDir, options.wait, pluginsOf(t));
     const flags = yield* root;
     if (
       Option.isNone(flags.home) &&
@@ -116,11 +120,13 @@ const uninstall = Command.make(
   Effect.fn(function* (options) {
     const t = yield* target;
     const fs = yield* FileSystem.FileSystem;
-    yield* Processes.ensureClosed(t.installDir, options.wait);
+    yield* Processes.ensureClosed(t.installDir, options.wait, pluginsOf(t));
     const result = yield* Install.removeShim(t);
     yield* Console.log(
       result === "removed" ? "Original T3 Code restored." : "t3mode was not installed.",
     );
+    // Without t3mode, nothing would keep the plugins' entries in Claude's and Codex's config current.
+    yield* ToolServers.reconcile(t, []);
     if (options.purge) {
       yield* fs.remove(t.home.root, { recursive: true, force: true });
       yield* Console.log(`Deleted ${t.home.root}.`);
@@ -147,7 +153,7 @@ const status = Command.make(
     const t = yield* target;
     const fs = yield* FileSystem.FileSystem;
     const s = yield* Install.readStatus(t);
-    const running = yield* Processes.countRunningIn(t.installDir);
+    const running = yield* Processes.countRunningIn(t.installDir, t.home.plugins);
     const deployed = yield* fs.exists(t.home.mainJs);
     const safeMode = yield* fs.exists(t.home.safeMode);
     const state = yield* fs.readFileString(t.home.state).pipe(Effect.option);
@@ -281,10 +287,38 @@ const sandbox = Command.make(
   }),
 ).pipe(Command.withDescription("Run t3mode on a private copy of T3 Code, for development"));
 
+/**
+ * The plugin store, and `refresh`, which brings Claude's and Codex's config in step with it. Both
+ * need T3 Code's exe; without an install there is no tool server to stop or register.
+ */
 const pluginStore = Effect.gen(function* () {
   const flags = yield* root;
   const layout = yield* Target.resolveHome(flags.home);
-  return yield* PluginStore.make({ layout, githubBase: githubUrl(process.env) });
+  const exe = yield* Target.resolve(flags).pipe(
+    Effect.map((t) => t.exe),
+    Effect.option,
+  );
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const store = yield* PluginStore.make({
+    layout,
+    githubBase: githubUrl(process.env),
+    ...(Option.isSome(exe)
+      ? {
+          stopProcesses: (folder: string) =>
+            Processes.stopPluginProcesses(exe.value, [folder]).pipe(
+              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            ),
+        }
+      : {}),
+  });
+  const refresh = Option.isSome(exe)
+    ? store.toolServers.pipe(
+        Effect.flatMap((servers) =>
+          ToolServers.reconcile({ exe: exe.value, home: layout }, servers),
+        ),
+      )
+    : Effect.void;
+  return Object.assign(store, { refresh });
 });
 
 const RELOAD = "Reload T3 Code (Ctrl+R) to apply it.";
@@ -383,6 +417,7 @@ const pluginAdd = Command.make(
       );
       yield* Console.log(`Installed ${installed.name} ${installed.version}. ${RELOAD}`);
     }
+    yield* store.refresh;
   }),
 ).pipe(Command.withDescription("Install a plugin from a GitHub release"));
 
@@ -428,6 +463,7 @@ const pluginUpdate = Command.make(
       if (!updated) continue;
       yield* Console.log(`Installed the latest release of ${updated.name}: ${updated.version}.`);
     }
+    yield* store.refresh;
     yield* Console.log(RELOAD);
   }),
 ).pipe(Command.withDescription("Install the latest release of unpinned GitHub plugins"));
@@ -436,7 +472,9 @@ const pluginRemove = Command.make(
   "remove",
   { id: Argument.String("id").pipe(Argument.withDescription("The plugin's id")) },
   Effect.fn(function* (options) {
-    const removed = yield* (yield* pluginStore).remove(options.id);
+    const store = yield* pluginStore;
+    const removed = yield* store.remove(options.id);
+    yield* store.refresh;
     yield* Console.log(
       removed === "removed"
         ? `Removed ${options.id}. ${RELOAD}`

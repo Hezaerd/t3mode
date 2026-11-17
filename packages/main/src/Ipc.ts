@@ -16,6 +16,7 @@ import { LocalSockets } from "./LocalSockets.ts";
 import { PluginHost } from "./PluginHost.ts";
 import { SettingsStore } from "./SettingsStore.ts";
 import { ShortcutActionSchema, T3Keybindings } from "./T3Keybindings.ts";
+import { ToolServers } from "./ToolServers.ts";
 import { Updater } from "./Updater.ts";
 
 const UpdateActionSchema = Schema.Literals(["status", "check", "restart"]);
@@ -62,6 +63,12 @@ const logAt = (level: (typeof LogArgs.Type)[0], message: string) => {
   }
 };
 
+/** Install, update and remove change which tool servers are registered. */
+const changesPlugins = (action: unknown) =>
+  typeof action === "object" &&
+  action !== null &&
+  ["install", "update", "remove"].includes(String((action as { _tag?: unknown })._tag));
+
 const checkSender = (channel: string, event: IpcMainInvokeEvent) => {
   const frame = event.senderFrame;
   const url = frame?.url ?? "";
@@ -81,6 +88,7 @@ export const register = Effect.fn("Ipc.register")(function* (options: {
   const keybindings = yield* T3Keybindings;
   const updater = yield* Updater;
   const disks = yield* Disks;
+  const toolServers = yield* ToolServers;
   // Pages that asked for the update status get every change pushed to them.
   const subscribed = new WeakSet<WebContents>();
   const subscribe = (sender: WebContents) =>
@@ -113,7 +121,11 @@ export const register = Effect.fn("Ipc.register")(function* (options: {
     handle(Channel.socket, (args, event) => sockets.act(args[0], event.sender));
     handle(Channel.pageScripts, () => plugins.pageScripts);
     handle(Channel.pluginScript, (args) => plugins.pluginScript(args[0]));
-    handle(Channel.plugins, (args) => withElectronFetch(plugins.act(args[0])));
+    handle(Channel.plugins, (args) =>
+      withElectronFetch(plugins.act(args[0])).pipe(
+        Effect.tap(() => (changesPlugins(args[0]) ? toolServers.refresh : Effect.void)),
+      ),
+    );
     handle(Channel.log, (args) =>
       Schema.decodeUnknownEffect(LogArgs)(args).pipe(
         Effect.flatMap(([level, message]) =>
@@ -127,7 +139,9 @@ export const register = Effect.fn("Ipc.register")(function* (options: {
     handle(Channel.readPluginData, () => pluginData.read);
     handle(Channel.writePluginData, (args) => pluginData.write(args[0], args[1]));
     handle(Channel.readSettings, () => settings.read);
-    handle(Channel.writeSettings, (args) => settings.write(args[0]));
+    handle(Channel.writeSettings, (args) =>
+      settings.write(args[0]).pipe(Effect.tap(() => toolServers.refresh)),
+    );
     handle(Channel.openLogs, () => openPath(layout.logs));
     handle(Channel.disks, () => disks.list);
     handle(Channel.shortcut, (args) =>

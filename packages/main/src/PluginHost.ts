@@ -7,15 +7,18 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { FetchHttpClient } from "effect/http";
+import { ChildProcessSpawner } from "effect/process";
 
 import { RENDERER_SCRIPT_NAME } from "@t3mode/shared/Ipc";
 import { githubUrl } from "@t3mode/shared/Layout";
 import type { InstalledPlugin, PageScript, PluginResult } from "@t3mode/shared/Plugins";
 import * as PluginStore from "@t3mode/shared/PluginStore";
 import { compareVersions } from "@t3mode/shared/Semver";
+import type { ToolServer } from "@t3mode/shared/ToolServers";
 
 import { Files } from "./Files.ts";
 import { Home } from "./Home.ts";
+import * as PluginProcesses from "./PluginProcesses.ts";
 
 export const PluginActionSchema = Schema.Union([
   Schema.TaggedStruct("list", {}),
@@ -40,6 +43,8 @@ export class PluginHost extends Context.Service<
     readonly pageScripts: Effect.Effect<ReadonlyArray<PageScript>>;
     readonly pluginScript: (id: unknown) => Effect.Effect<PageScript | null, Schema.SchemaError>;
     readonly act: (input: unknown) => Effect.Effect<unknown, Schema.SchemaError>;
+    /** The installed plugins' tool servers whose pinned files all match. */
+    readonly toolServers: Effect.Effect<ReadonlyArray<ToolServer>>;
   }
 >()("@t3mode/main/PluginHost") {}
 
@@ -61,7 +66,15 @@ const result = <A>(
 export const make = Effect.gen(function* () {
   const files = yield* Files;
   const { layout } = yield* Home;
-  const store = yield* PluginStore.make({ layout, githubBase: githubUrl(process.env) });
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const store = yield* PluginStore.make({
+    layout,
+    githubBase: githubUrl(process.env),
+    stopProcesses: (folder) =>
+      PluginProcesses.stop([folder]).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      ),
+  });
   let updates: Readonly<Record<string, string>> = {};
 
   const withUpdate = (plugin: InstalledPlugin): InstalledPlugin => {
@@ -125,6 +138,7 @@ export const make = Effect.gen(function* () {
       return (yield* store.script(id)) ?? null;
     }),
     act,
+    toolServers: store.toolServers,
   });
 });
 

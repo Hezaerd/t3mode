@@ -29,6 +29,7 @@ import * as PluginHost from "./PluginHost.ts";
 import * as Preload from "./Preload.ts";
 import * as SettingsStore from "./SettingsStore.ts";
 import * as T3Keybindings from "./T3Keybindings.ts";
+import * as ToolServers from "./ToolServers.ts";
 import * as Updater from "./Updater.ts";
 
 /**
@@ -77,6 +78,7 @@ const program = Effect.gen(function* () {
   }
   yield* Ipc.register({ safeMode: false });
   yield* Preload.register();
+  yield* (yield* ToolServers.ToolServers).start;
   yield* guard.watchCrashes;
 });
 
@@ -89,7 +91,7 @@ const MainLayer = Layer.mergeAll(
   Disks.layer,
   T3Keybindings.layer,
   Updater.layer(updaterOptions),
-  LocalSockets.layer.pipe(Layer.provideMerge(PluginHost.layer)),
+  Layer.mergeAll(LocalSockets.layer, ToolServers.layer).pipe(Layer.provideMerge(PluginHost.layer)),
 ).pipe(
   Layer.provideMerge(Layer.mergeAll(SettingsStore.layer, PluginDataStore.layer)),
   Layer.provideMerge(FileLogger.layer),
