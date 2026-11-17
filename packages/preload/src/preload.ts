@@ -17,6 +17,7 @@ import type { GithubSource, PageScript, PluginDataSnapshot } from "@t3mode/share
 import type { Settings } from "@t3mode/shared/Settings";
 import type { ShortcutAction, ShortcutStatus } from "@t3mode/shared/Shortcut";
 import type { UpdateAction, UpdateStatus } from "@t3mode/shared/Updates";
+import { T3MODE_VERSION } from "@t3mode/shared/Version";
 
 const GUARD = "__t3modePreloaded";
 
@@ -28,6 +29,27 @@ const runScript = async (script: PageScript): Promise<void> => {
 };
 
 const plugins = (action: PluginAction) => ipcRenderer.invoke(Channel.plugins, action);
+
+// The preload runs before page scripts, while the splash is still on screen.
+const showSplashVersion = (): void => {
+  const shell = document.getElementById("boot-shell");
+  if (!shell) return;
+  const label = document.createElement("div");
+  label.textContent = `T3 Mode v${T3MODE_VERSION}`;
+  Object.assign(label.style, {
+    position: "absolute",
+    bottom: "24px",
+    left: "0",
+    right: "0",
+    textAlign: "center",
+    fontSize: "11px",
+    opacity: "0.5",
+    pointerEvents: "none",
+    userSelect: "none",
+    letterSpacing: "0.02em",
+  });
+  shell.append(label);
+};
 
 const start = (): void => {
   const scope = globalThis as unknown as Record<string, unknown>;
@@ -75,6 +97,12 @@ const start = (): void => {
   };
   contextBridge.exposeInMainWorld("t3modeNative", bridge);
   const logError = (message: string) => bridge.log("error", message).catch(() => undefined);
+
+  if (document.readyState === "loading") {
+    document.addEventListener("readystatechange", showSplashVersion, { once: true });
+  } else {
+    showSplashVersion();
+  }
 
   const runEachInOrder = (scripts: ReadonlyArray<PageScript>) =>
     scripts.reduce<Promise<unknown>>(
