@@ -413,7 +413,7 @@ const pluginUpdate = Command.make(
             yield* Console.log(accessLines(error.approval).join("\n"));
             if (!(yield* Prompt.Confirm({ message: `Approve new access for ${id}?` })))
               return undefined;
-            return yield* store.update(id, true);
+            return yield* store.update(id, error.approval);
           }),
         ),
       );

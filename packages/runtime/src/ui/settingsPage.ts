@@ -789,6 +789,7 @@ export class SettingsPage {
   async #update(plugin: InstalledPlugin): Promise<void> {
     const result = await this.#runtime.updatePlugin(plugin.id);
     if (!result.ok && result.approval) {
+      const approval = result.approval;
       const panel = h(
         "div",
         { className: `${native.card} t3mode-confirm` },
@@ -800,7 +801,7 @@ export class SettingsPage {
           text: "Approve and update",
           onClick: () =>
             void busy(approve, async () => {
-              const updated = await this.#runtime.updatePlugin(plugin.id, true);
+              const updated = await this.#runtime.updatePlugin(plugin.id, approval);
               toast(
                 updated.ok
                   ? `${updated.value.name} is updated to ${updated.value.version}.`

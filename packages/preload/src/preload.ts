@@ -13,7 +13,7 @@ import {
   type SocketEvent,
   isMainWindowUrl,
 } from "@t3mode/shared/Ipc";
-import type { GithubSource, PageScript, PluginDataSnapshot } from "@t3mode/shared/Plugins";
+import type { Access, GithubSource, PageScript, PluginDataSnapshot } from "@t3mode/shared/Plugins";
 import type { Settings } from "@t3mode/shared/Settings";
 import type { ShortcutAction, ShortcutStatus } from "@t3mode/shared/Shortcut";
 import type { UpdateAction, UpdateStatus } from "@t3mode/shared/Updates";
@@ -85,7 +85,8 @@ const start = (): void => {
       list: () => plugins({ _tag: "list" }),
       preview: (input: string) => plugins({ _tag: "preview", input }),
       install: (source: GithubSource, id: string) => plugins({ _tag: "install", source, id }),
-      update: (id: string, approved = false) => plugins({ _tag: "update", id, approved }),
+      update: (id: string, approved?: Access) =>
+        plugins({ _tag: "update", id, ...(approved === undefined ? {} : { approved }) }),
       remove: (id: string) => plugins({ _tag: "remove", id }),
       checkUpdates: () => plugins({ _tag: "check" }),
     },

@@ -13,6 +13,7 @@ import { HttpClient, HttpClientRequest } from "effect/http";
 
 import type { HomeLayout } from "./Layout.ts";
 import {
+  type Access,
   accessGrew,
   declaredAccess,
   extraFiles,
@@ -186,7 +187,7 @@ export class PluginStore extends Context.Service<
     ) => Effect.Effect<InstalledPlugin, PluginError>;
     readonly update: (
       id: string,
-      approved?: boolean,
+      approved?: boolean | Access,
     ) => Effect.Effect<InstalledPlugin, PluginError>;
     readonly remove: (id: string) => Effect.Effect<RemoveResult, PluginError>;
     readonly link: (path: string) => Effect.Effect<ReadonlyArray<InstalledPlugin>, PluginError>;
@@ -492,7 +493,7 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
   const installNow = Effect.fn("PluginStore.installNow")(function* (
     source: GithubSource,
     expectedId: string,
-    approved = false,
+    approved: boolean | Access = false,
   ) {
     const { manifest, bytes: manifestBytes, release } = yield* fetchManifest(source);
     yield* checkManifest(manifest, release, expectedId);
@@ -502,8 +503,13 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
     const access = declaredAccess(manifest);
     if (
       previous &&
-      !approved &&
-      accessGrew(previous.approved ?? { backend: false, mcp: false, sockets: [] }, access)
+      approved !== true &&
+      accessGrew(
+        typeof approved === "object"
+          ? approved
+          : (previous.approved ?? { backend: false, mcp: false, sockets: [] }),
+        access,
+      )
     ) {
       return yield* new PluginError({
         message: "This update needs approval for its declared access.",
@@ -616,7 +622,10 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
     withLock,
   );
 
-  const update = Effect.fn("PluginStore.update")(function* (id: string, approved = false) {
+  const update = Effect.fn("PluginStore.update")(function* (
+    id: string,
+    approved: boolean | Access = false,
+  ) {
     const entry = yield* entryOf(id);
     if (entry.source.kind === "local") {
       return yield* new PluginError({

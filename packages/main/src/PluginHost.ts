@@ -26,7 +26,7 @@ export const PluginActionSchema = Schema.Union([
   }),
   Schema.TaggedStruct("update", {
     id: PluginStore.PluginIdSchema,
-    approved: Schema.optionalKey(Schema.Boolean),
+    approved: Schema.optionalKey(PluginStore.AccessSchema),
   }),
   Schema.TaggedStruct("remove", { id: PluginStore.PluginIdSchema }),
   Schema.TaggedStruct("check", {}),

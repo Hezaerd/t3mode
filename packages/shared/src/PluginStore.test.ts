@@ -637,7 +637,12 @@ describe("program packaging", () => {
         const refused = yield* store.update("my-plugin").pipe(Effect.flip);
         expect(refused.approval?.sockets).toEqual(["new-*"]);
         expect(yield* fs.readFileString(home.pluginsLock)).toBe(before);
-        yield* store.update("my-plugin", true);
+        const changed = yield* store
+          .update("my-plugin", { backend: false, mcp: false, sockets: [] })
+          .pipe(Effect.flip);
+        expect(changed.approval?.sockets).toEqual(["new-*"]);
+        yield* store.update("my-plugin", refused.approval);
+
         expect(yield* fs.readDirectory(folder)).toEqual(
           expect.arrayContaining(["plugin.js", "manifest.json"]),
         );
