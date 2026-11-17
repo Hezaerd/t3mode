@@ -16,7 +16,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vite-plus
 
 import { homeLayout } from "./Layout.ts";
 import * as PluginStore from "./PluginStore.ts";
-import { type GithubSource, MAX_PLUGIN_CODE_BYTES } from "./Plugins.ts";
+import {
+  accessGrew,
+  declaredAccess,
+  type GithubSource,
+  MAX_PLUGIN_CODE_BYTES,
+  MAX_PLUGIN_SCRIPT_BYTES,
+} from "./Plugins.ts";
 
 const assets = new Map<string, string | Uint8Array | ReadonlyArray<Uint8Array>>();
 let server: NodeHttp.Server;
@@ -322,6 +328,8 @@ describe("PluginStore", () => {
               source: github("someone/my-plugin"),
               version: "1.0.0",
               sha256: sha256(CODE),
+              files: { "plugin.js": sha256(CODE) },
+              approved: { backend: false, mcp: false, sockets: [] },
             },
           },
         });
@@ -576,4 +584,185 @@ describe("PluginStore", () => {
         expect(yield* store.checkUpdates).toEqual({ updates: {}, failures: {} });
       }),
     ));
+});
+
+describe("program packaging", () => {
+  it("pins every binary and script, refuses access growth, and removes obsolete files", () =>
+    withStore(({ store, fs, path, home }) =>
+      Effect.gen(function* () {
+        publish("someone/program", {
+          manifest: manifest({
+            backend: "backend.cjs",
+            mcp: "mcp.js",
+            files: ["native.node", "backend.cjs"],
+          }),
+          code: CODE,
+        });
+        const contents = {
+          "backend.cjs": "backend",
+          "mcp.js": "mcp",
+          "native.node": new Uint8Array([0, 255, 128]),
+        };
+        for (const [name, bytes] of Object.entries(contents))
+          assets.set(`/someone/program/releases/latest/download/${name}`, bytes);
+        yield* store.install(github("someone/program"), "my-plugin");
+        const folder = path.join(home.plugins, "my-plugin");
+        const installed = JSON.parse(yield* fs.readFileString(home.pluginsLock)).plugins[
+          "my-plugin"
+        ];
+        expect(installed).toMatchObject({
+          backend: "backend.cjs",
+          mcp: "mcp.js",
+          approved: { backend: true, mcp: true, sockets: [] },
+        });
+        expect(Object.keys(installed.files).toSorted()).toEqual([
+          "backend.cjs",
+          "mcp.js",
+          "native.node",
+          "plugin.js",
+        ]);
+        for (const [name, bytes] of Object.entries(contents)) {
+          expect(installed.files[name]).toBe(
+            NodeCrypto.createHash("sha256").update(bytes).digest("hex"),
+          );
+          expect(new Uint8Array(yield* fs.readFile(path.join(folder, name)))).toEqual(
+            typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes,
+          );
+        }
+        const before = yield* fs.readFileString(home.pluginsLock);
+        publish("someone/program", {
+          manifest: manifest({ version: "1.1.0", sockets: ["new-*"] }),
+          code: CODE,
+        });
+        const refused = yield* store.update("my-plugin").pipe(Effect.flip);
+        expect(refused.approval?.sockets).toEqual(["new-*"]);
+        expect(yield* fs.readFileString(home.pluginsLock)).toBe(before);
+        yield* store.update("my-plugin", true);
+        expect(yield* fs.readDirectory(folder)).toEqual(
+          expect.arrayContaining(["plugin.js", "manifest.json"]),
+        );
+        expect(yield* fs.exists(path.join(folder, "native.node"))).toBe(false);
+        yield* store.remove("my-plugin");
+        expect(yield* fs.exists(folder)).toBe(false);
+      }),
+    ));
+
+  it("removes all pinned program files", () =>
+    withStore(({ store, fs, path, home }) =>
+      Effect.gen(function* () {
+        publish("someone/program", {
+          manifest: manifest({ backend: "b.js", mcp: "m.cjs", files: ["a.node"] }),
+          code: CODE,
+        });
+        for (const name of ["b.js", "m.cjs", "a.node"])
+          assets.set(`/someone/program/releases/latest/download/${name}`, "bytes");
+        yield* store.install(github("someone/program"), "my-plugin");
+        yield* store.remove("my-plugin");
+        expect(yield* fs.exists(path.join(home.plugins, "my-plugin"))).toBe(false);
+        expect(JSON.parse(yield* fs.readFileString(home.pluginsLock)).plugins).toEqual({});
+      }),
+    ));
+
+  it.each([
+    { backend: "bad.node" },
+    { mcp: "bad.exe" },
+    { files: Array.from({ length: 21 }, (_, i) => `file${i}`) },
+  ])("refuses invalid program declarations %j", (fields) =>
+    withStore(({ store }) =>
+      Effect.gen(function* () {
+        publish("someone/program", { manifest: manifest(fields), code: CODE });
+        expect(yield* failure(store.preview("someone/program"))).toContain("invalid");
+      }),
+    ),
+  );
+
+  it("refuses an oversized script while streaming without a partial lockfile", () =>
+    withStore(({ store, fs, home }) =>
+      Effect.gen(function* () {
+        publish("someone/program", { manifest: manifest({ backend: "backend.cjs" }), code: CODE });
+        assets.set("/someone/program/releases/latest/download/backend.cjs", [
+          new Uint8Array(MAX_PLUGIN_SCRIPT_BYTES),
+          new Uint8Array(1),
+        ]);
+        expect(yield* failure(store.install(github("someone/program"), "my-plugin"))).toContain(
+          "larger than 20 MB",
+        );
+        expect(yield* fs.exists(home.pluginsLock)).toBe(false);
+      }),
+    ));
+
+  it("reads and upgrades a legacy entry on the next write", () =>
+    withStore(({ store, fs, path, home }) =>
+      Effect.gen(function* () {
+        publish("someone/program", { manifest: manifest({ sockets: ["old-*"] }), code: CODE });
+        yield* store.install(github("someone/program"), "my-plugin");
+        yield* fs.writeFileString(
+          home.pluginsLock,
+          JSON.stringify({
+            version: 1,
+            plugins: {
+              "my-plugin": {
+                source: github("someone/program"),
+                version: "1.0.0",
+                sha256: sha256(CODE),
+              },
+            },
+          }),
+        );
+        expect((yield* store.list)[0]?.error).toBeUndefined();
+        const folder = path.join(home.root, "local");
+        yield* fs.makeDirectory(folder);
+        yield* fs.writeFileString(
+          path.join(folder, "manifest.json"),
+          manifest({ id: "local", backend: "backend.cjs", mcp: "mcp.js", files: ["native.node"] }),
+        );
+        yield* fs.writeFileString(path.join(folder, "plugin.js"), CODE);
+        yield* store.link(folder);
+        const entries = JSON.parse(yield* fs.readFileString(home.pluginsLock)).plugins;
+        expect(entries["my-plugin"].files).toEqual({ "plugin.js": sha256(CODE) });
+        expect(entries["my-plugin"].approved).toEqual({
+          backend: false,
+          mcp: false,
+          sockets: ["old-*"],
+        });
+        expect(entries.local).toMatchObject({
+          backend: "backend.cjs",
+          mcp: "mcp.js",
+          approved: { backend: true, mcp: true, sockets: [] },
+        });
+        expect(entries.local.files).toBeUndefined();
+      }),
+    ));
+
+  it.each([
+    "../bad.js",
+    "a/b.js",
+    "a\\b.js",
+    "manifest.json",
+    "plugin.js",
+    "t3mode.json",
+    ".hidden",
+    "x".repeat(101),
+  ])("refuses extra file name %s", (name) =>
+    withStore(({ store }) =>
+      Effect.gen(function* () {
+        publish("someone/program", { manifest: manifest({ files: [name] }), code: CODE });
+        expect(yield* failure(store.preview("someone/program"))).toContain("invalid");
+      }),
+    ),
+  );
+
+  it("detects access growth and wildcard coverage", () => {
+    const none = declaredAccess({});
+    expect(accessGrew(none, none)).toBe(false);
+    expect(accessGrew(none, declaredAccess({ backend: "b.js" }))).toBe(true);
+    expect(accessGrew(none, declaredAccess({ mcp: "m.js" }))).toBe(true);
+    expect(
+      accessGrew({ ...none, sockets: ["foo-*"] }, { ...none, sockets: ["foo-bar", "foo-narrow*"] }),
+    ).toBe(false);
+    expect(accessGrew({ ...none, sockets: ["foo-bar"] }, { ...none, sockets: ["foo-*"] })).toBe(
+      true,
+    );
+    expect(accessGrew({ ...none, sockets: ["foo-*"] }, { ...none, sockets: ["other"] })).toBe(true);
+  });
 });

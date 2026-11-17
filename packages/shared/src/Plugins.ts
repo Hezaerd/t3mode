@@ -23,6 +23,56 @@ export const MAX_REGISTRY_PLUGINS = 50;
 export const MAX_PLUGIN_CODE_BYTES = 5 * 1024 * 1024;
 export const MAX_PLUGIN_MANIFEST_BYTES = 64 * 1024;
 
+export const MAX_PLUGIN_SCRIPT_BYTES = 20 * 1024 * 1024;
+export const MAX_PLUGIN_ASSET_BYTES = 64 * 1024 * 1024;
+export const MAX_PLUGIN_EXTRA_BYTES = 128 * 1024 * 1024;
+export const MAX_PLUGIN_EXTRA_FILES = 20;
+export const isPluginFile = (name: string): boolean =>
+  /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(name) &&
+  !Object.values(PLUGIN_FILES).some((reserved) => reserved.toLowerCase() === name.toLowerCase());
+export const isPluginScript = (name: string): boolean =>
+  isPluginFile(name) && /\.(?:js|cjs)$/.test(name);
+
+export interface Access {
+  readonly backend: boolean;
+  readonly mcp: boolean;
+  readonly sockets: ReadonlyArray<string>;
+}
+
+export const declaredAccess = (
+  manifest: Pick<Manifest, "backend" | "mcp" | "sockets">,
+): Access => ({
+  backend: manifest.backend !== undefined,
+  mcp: manifest.mcp !== undefined,
+  sockets: manifest.sockets ?? [],
+});
+
+export const accessGrew = (approved: Access, next: Access): boolean =>
+  (next.backend && !approved.backend) ||
+  (next.mcp && !approved.mcp) ||
+  next.sockets.some(
+    (pattern) =>
+      !approved.sockets.some(
+        (allowed) =>
+          allowed === pattern ||
+          (allowed.endsWith("*") && pattern.startsWith(allowed.slice(0, -1))),
+      ),
+  );
+
+export const extraFiles = (manifest: Manifest): ReadonlyArray<string> => [
+  ...new Set(
+    [manifest.backend, manifest.mcp, ...(manifest.files ?? [])].filter(
+      (name): name is string => name !== undefined,
+    ),
+  ),
+];
+
+export const accessLines = (access: Access): ReadonlyArray<string> => [
+  ...(access.backend ? ["Runs a program outside T3 Code's window"] : []),
+  ...(access.mcp ? ["Adds tools to your agents"] : []),
+  ...(access.sockets.length ? [`Can connect to local sockets: ${access.sockets.join(", ")}`] : []),
+];
+
 export interface Manifest {
   readonly id: string;
   readonly name: string;
@@ -31,6 +81,9 @@ export interface Manifest {
   readonly author?: string;
   /** The plugin API's major version the plugin was built for. */
   readonly api: number;
+  readonly backend?: string;
+  readonly mcp?: string;
+  readonly files?: ReadonlyArray<string>;
   readonly sockets?: ReadonlyArray<string>;
 }
 
@@ -53,6 +106,10 @@ export interface LockEntry {
   readonly source: PluginSource;
   readonly version: string;
   readonly sha256?: string;
+  readonly files?: Readonly<Record<string, string>>;
+  readonly backend?: string;
+  readonly mcp?: string;
+  readonly approved?: Access;
 }
 
 export interface Lockfile {
@@ -102,7 +159,7 @@ export type RemoveResult = "removed" | "not-installed";
 
 export type PluginResult<A> =
   | { readonly ok: true; readonly value: A }
-  | { readonly ok: false; readonly error: string };
+  | { readonly ok: false; readonly error: string; readonly approval?: Access };
 
 export interface PluginRegistration {
   readonly id: string;

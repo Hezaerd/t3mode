@@ -13,6 +13,15 @@ import { HttpClient, HttpClientRequest } from "effect/http";
 
 import type { HomeLayout } from "./Layout.ts";
 import {
+  accessGrew,
+  declaredAccess,
+  extraFiles,
+  isPluginFile,
+  isPluginScript,
+  MAX_PLUGIN_SCRIPT_BYTES,
+  MAX_PLUGIN_ASSET_BYTES,
+  MAX_PLUGIN_EXTRA_BYTES,
+  MAX_PLUGIN_EXTRA_FILES,
   type GithubSource,
   type InstalledPlugin,
   isGithubOwner,
@@ -45,8 +54,15 @@ import {
 } from "./Plugins.ts";
 import { compareVersions, parseVersion } from "./Semver.ts";
 
+export const AccessSchema = Schema.Struct({
+  backend: Schema.Boolean,
+  mcp: Schema.Boolean,
+  sockets: Schema.Array(Schema.String.check(Schema.isPattern(SOCKET_ALLOW_PATTERN))),
+});
+
 export class PluginError extends Schema.TaggedError<PluginError>()("PluginError", {
   message: Schema.String,
+  approval: Schema.optionalKey(AccessSchema),
   cause: Schema.optional(Schema.Defect()),
 }) {}
 
@@ -79,10 +95,17 @@ export const ManifestSchema = Schema.Struct({
   description: Schema.String,
   author: Schema.optionalKey(Schema.String),
   api: Schema.Number,
+  backend: Schema.optionalKey(matching(isPluginScript, "a JavaScript file name")),
+  mcp: Schema.optionalKey(matching(isPluginScript, "a JavaScript file name")),
+  files: Schema.optionalKey(Schema.Array(matching(isPluginFile, "an extra file name"))),
   sockets: Schema.optionalKey(
     Schema.Array(Schema.String.check(Schema.isPattern(SOCKET_ALLOW_PATTERN))),
   ),
-});
+}).check(
+  Schema.makeFilter((manifest) => extraFiles(manifest).length <= MAX_PLUGIN_EXTRA_FILES, {
+    expected: "at most 20 extra files",
+  }),
+);
 
 export const RegistrySchema = Schema.Struct({
   plugins: Schema.Record(
@@ -114,6 +137,18 @@ export const LockfileSchema = Schema.Struct({
       source: PluginSourceSchema,
       version: Schema.String,
       sha256: Schema.optionalKey(Schema.String),
+      files: Schema.optionalKey(
+        Schema.Record(Schema.String, Schema.String).check(
+          Schema.makeFilter(
+            (files) =>
+              Object.keys(files).every((name) => name === PLUGIN_FILES.code || isPluginFile(name)),
+            { expected: "pinned file names" },
+          ),
+        ),
+      ),
+      backend: Schema.optionalKey(matching(isPluginScript, "a JavaScript file name")),
+      mcp: Schema.optionalKey(matching(isPluginScript, "a JavaScript file name")),
+      approved: Schema.optionalKey(AccessSchema),
     }),
   ).check(
     Schema.makeFilter((plugins) => Object.keys(plugins).every(isPluginId), {
@@ -149,7 +184,10 @@ export class PluginStore extends Context.Service<
       source: GithubSource,
       expectedId: string,
     ) => Effect.Effect<InstalledPlugin, PluginError>;
-    readonly update: (id: string) => Effect.Effect<InstalledPlugin, PluginError>;
+    readonly update: (
+      id: string,
+      approved?: boolean,
+    ) => Effect.Effect<InstalledPlugin, PluginError>;
     readonly remove: (id: string) => Effect.Effect<RemoveResult, PluginError>;
     readonly link: (path: string) => Effect.Effect<ReadonlyArray<InstalledPlugin>, PluginError>;
     readonly checkUpdates: Effect.Effect<UpdateCheck, PluginError>;
@@ -249,7 +287,7 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
     const text = yield* fs
       .readFileString(layout.pluginsLock)
       .pipe(Effect.mapError(fail(`Could not read ${layout.pluginsLock}.`)));
-    return yield* Schema.decodeEffect(LockfileJson)(text).pipe(
+    const decoded = yield* Schema.decodeEffect(LockfileJson)(text).pipe(
       Effect.mapError(
         (cause) =>
           new PluginError({
@@ -258,6 +296,25 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
           }),
       ),
     );
+    const plugins: Record<string, LockEntry> = {};
+    for (const [id, entry] of Object.entries(decoded.plugins)) {
+      const folder =
+        entry.source.kind === "local" ? entry.source.path : path.join(layout.plugins, id);
+      const manifest =
+        entry.approved === undefined
+          ? yield* fs
+              .readFileString(path.join(folder, PLUGIN_FILES.manifest))
+              .pipe(Effect.flatMap(Schema.decodeEffect(ManifestJson)), Effect.option)
+          : Option.none();
+      plugins[id] = {
+        ...entry,
+        ...(entry.files === undefined && entry.sha256 !== undefined
+          ? { files: { [PLUGIN_FILES.code]: entry.sha256 } }
+          : {}),
+        ...(Option.isSome(manifest) ? { approved: declaredAccess(manifest.value) } : {}),
+      };
+    }
+    return { ...decoded, plugins };
   });
 
   const writeLock = Effect.fn("PluginStore.writeLock")(function* (next: Lockfile) {
@@ -269,9 +326,15 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
 
   // An interrupted install leaves the old copy or a hash mismatch, never half-updated code that loads.
   const writeCodeThenManifestThenLock = Effect.fn("PluginStore.writeCodeThenManifestThenLock")(
-    function* (id: string, code: Uint8Array, manifest: Uint8Array, next: Lockfile) {
+    function* (
+      id: string,
+      files: Readonly<Record<string, Uint8Array>>,
+      manifest: Uint8Array,
+      next: Lockfile,
+    ) {
       const folder = path.join(layout.plugins, id);
-      yield* writeAtomic(path.join(folder, PLUGIN_FILES.code), code);
+      for (const [name, bytes] of Object.entries(files))
+        yield* writeAtomic(path.join(folder, name), bytes);
       yield* writeAtomic(path.join(folder, PLUGIN_FILES.manifest), manifest);
       yield* writeLock(next);
     },
@@ -326,8 +389,17 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
     if (code.value.byteLength > MAX_PLUGIN_CODE_BYTES) {
       return failed(described, `plugin.js is larger than ${megabytes(MAX_PLUGIN_CODE_BYTES)}.`);
     }
-    if (entry.source.kind === "github" && (yield* sha256Hex(code.value)) !== entry.sha256) {
-      return failed(described, "plugin.js changed since it was installed. Install it again.");
+    if (entry.source.kind === "github") {
+      if (!entry.files?.[PLUGIN_FILES.code])
+        return failed(described, "plugin.js has no installed hash. Install it again.");
+      for (const [name, hash] of Object.entries(entry.files ?? {})) {
+        const bytes =
+          name === PLUGIN_FILES.code
+            ? code
+            : yield* fs.readFile(path.join(folder, name)).pipe(Effect.option);
+        if (Option.isNone(bytes) || (yield* sha256Hex(bytes.value)) !== hash)
+          return failed(described, `${name} changed since it was installed. Install it again.`);
+      }
     }
     return { plugin: described, code: code.value };
   });
@@ -420,18 +492,62 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
   const installNow = Effect.fn("PluginStore.installNow")(function* (
     source: GithubSource,
     expectedId: string,
+    approved = false,
   ) {
     const { manifest, bytes: manifestBytes, release } = yield* fetchManifest(source);
     yield* checkManifest(manifest, release, expectedId);
     const current = yield* readLock;
     yield* checkConflict(current, manifest.id, source);
-    const { bytes: code } = yield* download(source, PLUGIN_FILES.code, MAX_PLUGIN_CODE_BYTES);
-    const sha256 = yield* sha256Hex(code);
-    const entry: LockEntry = { source, version: manifest.version, sha256 };
-    yield* writeCodeThenManifestThenLock(manifest.id, code, manifestBytes, {
+    const previous = lockEntry(current, manifest.id);
+    const access = declaredAccess(manifest);
+    if (
+      previous &&
+      !approved &&
+      accessGrew(previous.approved ?? { backend: false, mcp: false, sockets: [] }, access)
+    ) {
+      return yield* new PluginError({
+        message: "This update needs approval for its declared access.",
+        approval: access,
+      });
+    }
+    const files: Record<string, Uint8Array> = {};
+    files[PLUGIN_FILES.code] = (yield* download(
+      source,
+      PLUGIN_FILES.code,
+      MAX_PLUGIN_CODE_BYTES,
+    )).bytes;
+    let total = 0;
+    for (const name of extraFiles(manifest)) {
+      const cap =
+        name === manifest.backend || name === manifest.mcp
+          ? MAX_PLUGIN_SCRIPT_BYTES
+          : MAX_PLUGIN_ASSET_BYTES;
+      const bytes = (yield* download(source, name, Math.min(cap, MAX_PLUGIN_EXTRA_BYTES - total)))
+        .bytes;
+      total += bytes.byteLength;
+      files[name] = bytes;
+    }
+    const hashes: Record<string, string> = {};
+    for (const [name, bytes] of Object.entries(files)) hashes[name] = yield* sha256Hex(bytes);
+    const entry: LockEntry = {
+      source,
+      version: manifest.version,
+      sha256: hashes[PLUGIN_FILES.code]!,
+      files: hashes,
+      ...(manifest.backend === undefined ? {} : { backend: manifest.backend }),
+      ...(manifest.mcp === undefined ? {} : { mcp: manifest.mcp }),
+      approved: access,
+    };
+    yield* writeCodeThenManifestThenLock(manifest.id, files, manifestBytes, {
       ...current,
       plugins: { ...current.plugins, [manifest.id]: entry },
     });
+    for (const name of Object.keys(previous?.files ?? {})) {
+      if (!Object.hasOwn(files, name))
+        yield* fs
+          .remove(path.join(layout.plugins, manifest.id, name), { force: true })
+          .pipe(Effect.mapError(fail(`Could not delete ${name}.`)));
+    }
     yield* Effect.logInfo(`Installed ${manifest.id} ${manifest.version} from ${release}`);
     return (yield* inspect(manifest.id, entry)).plugin;
   });
@@ -496,11 +612,11 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
   });
 
   const install = Effect.fn("PluginStore.install")(
-    (source: GithubSource, expectedId: string) => installNow(source, expectedId),
+    (source: GithubSource, expectedId: string) => installNow(source, expectedId, true),
     withLock,
   );
 
-  const update = Effect.fn("PluginStore.update")(function* (id: string) {
+  const update = Effect.fn("PluginStore.update")(function* (id: string, approved = false) {
     const entry = yield* entryOf(id);
     if (entry.source.kind === "local") {
       return yield* new PluginError({
@@ -512,7 +628,7 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
         message: `"${id}" is pinned to ${entry.source.tag}. Install another release to change it.`,
       });
     }
-    return yield* installNow(entry.source, id);
+    return yield* installNow(entry.source, id, approved);
   }, withLock);
 
   const remove = Effect.fn("PluginStore.remove")(function* (id: string) {
@@ -574,7 +690,13 @@ export const make = Effect.fn("PluginStore.make")(function* (options: PluginStor
         }
         const source = { kind: "local", path: folder } as const;
         yield* checkConflict(current, manifest.id, source);
-        const entry: LockEntry = { source, version: manifest.version };
+        const entry: LockEntry = {
+          source,
+          version: manifest.version,
+          ...(manifest.backend === undefined ? {} : { backend: manifest.backend }),
+          ...(manifest.mcp === undefined ? {} : { mcp: manifest.mcp }),
+          approved: declaredAccess(manifest),
+        };
         return { id: manifest.id, entry };
       }),
     );
