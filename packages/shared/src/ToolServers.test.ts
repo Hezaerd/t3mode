@@ -302,4 +302,30 @@ describe("sync", () => {
     expect(config.mcpServers).toBeUndefined();
     expect(files.filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
+
+  it("writes the CommonJS marker when the plugins folder doesn't exist yet", async () => {
+    const { result, marker } = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3mode-sync-" });
+        const pluginsFolder = NodePath.join(dir, "plugins");
+        const result = yield* sync({
+          target,
+          paths: {
+            claude: NodePath.join(dir, "no-claude", ".claude.json"),
+            codex: NodePath.join(dir, "no-codex", "config.toml"),
+          },
+          pluginsFolder,
+          servers: [server],
+        });
+        const marker = yield* fs.readFileString(NodePath.join(pluginsFolder, "package.json"));
+        return { result, marker };
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(Layer.mergeAll(NodeFileSystem.layer, NodePathLayer.layer)),
+      ),
+    );
+    expect(result.failures).toEqual([]);
+    expect(JSON.parse(marker)).toEqual({ type: "commonjs" });
+  });
 });
