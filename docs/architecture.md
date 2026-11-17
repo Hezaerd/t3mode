@@ -222,7 +222,7 @@ The runtime calls `load()` inside its fault isolation, so an error in a plugin's
 
 ### 6. CLI (`packages/cli`)
 
-`pnpm t3mode <command>`, run from the repo in v1:
+`t3mode <command>`. The CLI ships as `t3mode` on npm (`npx t3mode <command>`, or `npm install --global t3mode`): `dist/t3mode.cjs` is the whole CLI in one CommonJS file with no dependencies, and `dist/bundles/` holds the bundles that `install` and `deploy` copy into the home (shim, loader, preload, renderer, update helper; `repair.cjs` sits next to `t3mode.cjs`). The build defines `__T3MODE_PACKAGED__` in that bundle, so `Artifacts.ts` reads from `dist/` there and from each package's `dist/` when the repo runs it from source with `pnpm t3mode`. `.github/workflows/publish-cli.yml` publishes it when `packages/cli/package.json` has a version npm doesn't have. That version must equal `T3MODE_VERSION`. `sandbox` only runs from the repo.
 
 | Command     | Does                                                                                                                                                                     |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

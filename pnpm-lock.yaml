@@ -195,7 +195,7 @@ importers:
         version: 1.4.0(@types/node@24.12.4)(@vitest/ui@5.0.5)
 
   packages/cli:
-    dependencies:
+    devDependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.1.2(effect@4.1.3)(redis@6.3.1)
@@ -205,16 +205,27 @@ importers:
       '@electron/fuses':
         specifier: 2.1.3
         version: 2.1.3
+      '@t3mode/main':
+        specifier: workspace:*
+        version: link:../main
+      '@t3mode/preload':
+        specifier: workspace:*
+        version: link:../preload
+      '@t3mode/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       '@t3mode/shared':
         specifier: workspace:*
         version: link:../shared
-      effect:
-        specifier: 'catalog:'
-        version: 4.1.3
-    devDependencies:
+      '@t3mode/shim':
+        specifier: workspace:*
+        version: link:../shim
       '@types/node':
         specifier: 'catalog:'
         version: 24.12.4
+      effect:
+        specifier: 'catalog:'
+        version: 4.1.3
       vite-plus:
         specifier: 'catalog:'
         version: 1.4.0(@types/node@24.12.4)(@vitest/ui@5.0.5)

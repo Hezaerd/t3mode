@@ -4,15 +4,15 @@ Bug reports, fixes, and ideas for the plugin API are welcome. Everyone who takes
 
 ## Report a problem in the right place
 
-- For a bug in t3mode, [open an issue](https://github.com/Hezaerd/t3mode/issues). Include the output of `pnpm t3mode status` and your T3 Code version.
+- For a bug in t3mode, [open an issue](https://github.com/Hezaerd/t3mode/issues). Include the output of `t3mode status` and your T3 Code version.
 - For a bug in a plugin, open an issue in that plugin's repo. Plugins don't live in this repo.
-- For a bug you think is in T3 Code, run `pnpm t3mode safe` and try again. If the bug still happens without t3mode, report it to [T3 Code](https://github.com/pingdotgg/t3code).
+- For a bug you think is in T3 Code, run `t3mode safe` and try again. If the bug still happens without t3mode, report it to [T3 Code](https://github.com/pingdotgg/t3code).
 
 Before you start a large change, such as a new plugin API or a change to how t3mode installs itself or T3 Code's updates, open an issue to agree on the design.
 
 ## Set up
 
-You need the same tools as for an install: Windows, the T3 Code desktop app, Git, Node.js 24 or later, and pnpm.
+You need Windows, the T3 Code desktop app, Git, Node.js 24 or later, and pnpm.
 
 ```sh
 git clone https://github.com/Hezaerd/t3mode.git
@@ -47,7 +47,7 @@ Press Ctrl+R in the sandbox to load a change to the page code in `packages/runti
 - `packages/preload` connects the page to main and runs the page scripts.
 - `packages/runtime` runs in the page: plugins, the settings pages, and the shortcut.
 - `packages/shared` holds the code that main and the CLI both use.
-- `packages/cli` is `pnpm t3mode`.
+- `packages/cli` is the `t3mode` command, `t3mode` on npm. In this repo, `pnpm t3mode` runs it from source with the bundles from `pnpm build`.
 - `packages/plugin-sdk` is `@t3mode/plugin-sdk` on npm.
 - `templates/plugin` is the starting point for a new plugin.
 

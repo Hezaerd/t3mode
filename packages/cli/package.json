@@ -1,21 +1,38 @@
 {
-  "name": "@t3mode/cli",
-  "version": "0.0.0",
-  "private": true,
+  "name": "t3mode",
+  "version": "0.1.0",
+  "description": "Install t3mode, the plugin loader for the T3 Code desktop app, and manage its plugins",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hezaerd/t3mode.git",
+    "directory": "packages/cli"
+  },
+  "bin": {
+    "t3mode": "./dist/t3mode.cjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "os": [
+    "win32"
+  ],
   "type": "module",
   "scripts": {
     "build": "vp pack",
     "typecheck": "effect-tsgo tsc --noEmit -p ."
   },
-  "dependencies": {
+  "devDependencies": {
     "@effect/platform-node": "catalog:",
     "@electron/asar": "4.3.2",
     "@electron/fuses": "2.1.3",
+    "@t3mode/main": "workspace:*",
+    "@t3mode/preload": "workspace:*",
+    "@t3mode/runtime": "workspace:*",
     "@t3mode/shared": "workspace:*",
-    "effect": "catalog:"
-  },
-  "devDependencies": {
+    "@t3mode/shim": "workspace:*",
     "@types/node": "catalog:",
+    "effect": "catalog:",
     "vite-plus": "catalog:"
   }
 }

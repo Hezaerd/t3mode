@@ -488,11 +488,11 @@ export class SettingsPage {
           }),
           row({
             title: "Safe mode",
-            description: `To start T3 Code once without ${NAME}, close it and run "pnpm t3mode safe". ${NAME} also skips a launch on its own after failed starts or repeated crashes.`,
+            description: `To start T3 Code once without ${NAME}, close it and run "t3mode safe". ${NAME} also skips a launch on its own after failed starts or repeated crashes.`,
           }),
           row({
             title: "Uninstall",
-            description: `Close T3 Code and run "pnpm t3mode uninstall" to restore its original files.`,
+            description: `Close T3 Code and run "t3mode uninstall" to restore its original files.`,
           }),
         ),
       ),

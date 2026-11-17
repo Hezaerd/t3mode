@@ -1,4 +1,5 @@
-// `pnpm t3mode <command>`: install, repair, uninstall, deploy, status, safe, sandbox, plugin.
+// `t3mode <command>` (`pnpm t3mode` in this repo): install, repair, uninstall, deploy, status,
+// doctor, safe, sandbox, plugin.
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Config from "effect/Config";
@@ -298,7 +299,7 @@ const pluginList = Command.make(
     const plugins = yield* (yield* pluginStore).list;
     yield* Console.log(
       plugins.length === 0
-        ? "No plugins installed. Add one with: pnpm t3mode plugin add <owner/repo>"
+        ? `No plugins installed. Add one with: ${Artifacts.command} plugin add <owner/repo>`
         : plugins.map(describePlugin).join("\n"),
     );
   }),
