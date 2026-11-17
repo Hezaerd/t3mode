@@ -2,6 +2,9 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { at, beat, tempo, duration, sections, cues } from "./timeline.js";
+const sectionById = (id) => sections.find((section) => section.id === id);
+const outro = sectionById("outro");
+const anatomy = sectionById("anatomy");
 
 const rate = 48000;
 const count = Math.round(duration * rate);
@@ -282,7 +285,7 @@ function render(accentsOnly) {
           );
           const envelope = Math.min(1, (t + 0.00002) / 0.12) * Math.min(1, (seconds - t) / 0.45);
           x = filter(chordSignal, 950) * envelope;
-          if (event.bar === 16) x *= Math.exp(-t * 1.1);
+          if (event.bar === outro.bar) x *= Math.exp(-t * 1.1);
           break;
         }
         case "sweep":
@@ -493,7 +496,11 @@ function verify() {
         maxOffsetMs: Math.max(...offsets),
         meanOffsetMs: offsets.reduce((a, b) => a + b) / offsets.length,
         windows,
-        anatomyBandPercent: fftEnergy(main, sample(at(4)), sample(at(8))),
+        anatomyBandPercent: fftEnergy(
+          main,
+          sample(at(anatomy.bar)),
+          sample(at(anatomy.bar + anatomy.bars)),
+        ),
       },
       null,
       2,

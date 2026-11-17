@@ -1,6 +1,6 @@
 # Render the t3mode trailer
 
-The trailer is a 38-second, 1080×1080, 60 fps video for X. It shows plugins that ship a backend. Its music and its motion both read their timing from `timeline.js`, so they stay on the same beats.
+The trailer is a 34-second, 1080×1080, 60 fps video for X. It shows plugins that ship a backend. Its music and its motion both read their timing from `timeline.js`, so they stay on the same beats.
 
 You need Node 24, `ffmpeg` on `PATH`, and Microsoft Edge or Google Chrome. Run the commands from this folder.
 
@@ -18,9 +18,9 @@ You need Node 24, `ffmpeg` on `PATH`, and Microsoft Edge or Google Chrome. Run t
    node render.js --audio out/music.wav --out out/t3mode-trailer.mp4
    ```
 
-   It takes about two minutes and prints the frame count at the end, which is 2280.
+   It takes about two minutes and prints the frame count at the end, which is 2040.
 
-3. Check that each cue has motion and a sound within a frame of each other:
+3. Check that each cue has motion and a sound within a frame of each other, and list any stretch with no motion longer than 1.5 s:
 
    ```sh
    node cue-check.js out/t3mode-trailer.mp4

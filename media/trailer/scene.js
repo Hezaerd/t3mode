@@ -363,8 +363,6 @@ const tracks = [
       key("crash", 0, { glitch: 1, opacity: 1 }, "hold"),
       key("crash", 8 * F, { glitch: 0, opacity: 1 }, "hold"),
       key("crash", 14 * F, { opacity: 0.3 }, "quartOut"),
-      key("restart", 0, { opacity: 1, scale: 0.92 }, "hold"),
-      key("restart", 12 * F, { scale: 1 }, "spring"),
     ],
   },
   { el: $("tools"), keys: [start({ scale: 1 }), ...punch("node-tools")] },
@@ -386,20 +384,10 @@ const tracks = [
       key("crash", 0, { border: color.error, bg: alpha(color.error, 0.4), glitch: 1 }, "hold"),
       key("crash", 8 * F, { glitch: 0 }, "hold"),
       key("crash", 12 * F, { bg: alpha(color.error, 0.1) }, "quartOut"),
-      key("restart", 0, { border: color.ok, bg: alpha(color.ok, 0.22) }, "hold"),
-      key("restart", 12 * F, { bg: alpha(color.ok, 0.06) }, "quartOut"),
     ],
   },
-  {
-    el: $("crashed"),
-    keys: [
-      start({ opacity: 0 }),
-      key("crash", 0, { opacity: 1 }, "hold"),
-      key("restart", 0, { opacity: 0 }, "hold"),
-    ],
-  },
-  { el: $("restarted"), keys: [start({ opacity: 0, ty: 0 }), ...rise("restart", 0, 8)] },
-  { el: $("keeps"), keys: [start({ opacity: 0, ty: 0 }), ...rise("crash", 0, 8)] },
+  { el: $("crashed"), keys: [start({ opacity: 0 }), key("crash", 0, { opacity: 1 }, "hold")] },
+  { el: $("keeps"), keys: [start({ opacity: 0, ty: 0 }), ...rise("contained", 0, 8)] },
   {
     el: $("wire-page"),
     keys: [

@@ -47,7 +47,16 @@ const rows = cues
       audioJump: +(after / Math.max(before, 1)).toFixed(1),
     };
   });
+const stillRuns = [];
+for (let frame = 1, runStart = 1; frame <= frames; frame++) {
+  if (frame < frames && change[frame] <= 0.05) continue;
+  if ((frame - runStart) / video.fps > 1.5)
+    stillRuns.push(`${(runStart / video.fps).toFixed(2)}-${(frame / video.fps).toFixed(2)}s`);
+  runStart = frame + 1;
+}
+
 console.table(rows);
+console.log(`still for more than 1.5 s: ${stillRuns.join(", ") || "never"}`);
 console.log(
   `${frames} frames; cues with no visual change within ±3 frames: ${
     rows
