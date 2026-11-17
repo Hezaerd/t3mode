@@ -571,6 +571,7 @@ export class Runtime {
       queryFirst,
       currentThreadKey,
       react: { findPropsUp, findHookState },
+      disks: () => this.#native.disks(),
     };
 
     try {

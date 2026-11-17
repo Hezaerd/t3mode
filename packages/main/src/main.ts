@@ -18,6 +18,7 @@ import {
 import { T3MODE_VERSION } from "@t3mode/shared/Version";
 
 import * as BootGuard from "./BootGuard.ts";
+import * as Disks from "./Disks.ts";
 import * as FileLogger from "./FileLogger.ts";
 import * as Files from "./Files.ts";
 import * as Home from "./Home.ts";
@@ -85,6 +86,7 @@ const PlatformLayer = NodeChildProcessSpawner.layer.pipe(
 
 const MainLayer = Layer.mergeAll(
   BootGuard.layer,
+  Disks.layer,
   T3Keybindings.layer,
   Updater.layer(updaterOptions),
   LocalSockets.layer.pipe(Layer.provideMerge(PluginHost.layer)),

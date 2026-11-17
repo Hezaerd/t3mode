@@ -54,6 +54,8 @@ export const Channel = {
   update: "t3mode:update",
   /** Main → page: the update status changed. Sent to pages that asked for the status. */
   updateChanged: "t3mode:update-changed",
+  /** Page → main: size and free space of the local fixed drives. */
+  disks: "t3mode:disks",
 } as const;
 
 export const RENDERER_SCRIPT_NAME = "t3mode-renderer.js";
@@ -79,6 +81,15 @@ export interface Info {
   readonly home: string;
   readonly logs: string;
   readonly safeMode: boolean;
+}
+
+export interface Disk {
+  /** The drive's root, such as `C:\`. */
+  readonly path: string;
+  /** Bytes. */
+  readonly total: number;
+  /** Bytes available to the user. */
+  readonly free: number;
 }
 
 /** What the preload exposes on `window.t3modeNative`. */
@@ -110,4 +121,5 @@ export interface NativeBridge {
     readonly checkUpdates: () => Promise<PluginResult<ReadonlyArray<InstalledPlugin>>>;
   };
   readonly loadPlugin: (id: string) => Promise<void>;
+  readonly disks: () => Promise<ReadonlyArray<Disk>>;
 }
