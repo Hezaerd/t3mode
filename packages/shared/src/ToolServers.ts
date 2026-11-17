@@ -236,7 +236,12 @@ export const editCodexConfig = (
       if (parts.length === 1 && parts[0] === "mcp_servers") inline = true;
     }
   }
-  if (inline) return refuse("it sets mcp_servers as an inline table");
+  // Nothing t3mode could own lives in such a file, so it is only a problem with a server to add.
+  if (inline) {
+    return servers.length > 0
+      ? refuse("it sets mcp_servers as an inline table")
+      : { text: undefined, removed: [], conflicts: [] };
+  }
 
   const wanted = new Map(servers.map((server) => [toolServerName(server.id), server]));
   const drop = new Set<Block>();

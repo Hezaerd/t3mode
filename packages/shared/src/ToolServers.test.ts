@@ -82,6 +82,12 @@ describe("editCodexConfig", () => {
         text: undefined,
         refused: expect.stringContaining("inline"),
       });
+      // With nothing to add, there is nothing to report at every launch.
+      expect(editCodexConfig(text, target, []), text).toEqual({
+        text: undefined,
+        removed: [],
+        conflicts: [],
+      });
     }
     // A table named mcp_servers inside another table is something else.
     expect(editCodexConfig("[profiles.a]\nmcp_servers = {}\n", target, [server]).text).toContain(
