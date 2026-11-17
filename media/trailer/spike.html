@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+  <body style="margin: 0; width: 1080px; height: 1080px; overflow: hidden">
+    <div id="stage" style="width: 100%; height: 100%"></div>
+    <script type="module">
+      import { beat, video } from "./timeline.js";
+      const stage = document.getElementById("stage");
+      window.trailer = {
+        ready: document.fonts.ready,
+        seek(time) {
+          const frame = Math.round(time * video.fps);
+          const flash = (time % beat) * video.fps < 3 - 1e-6;
+          stage.style.background = flash
+            ? "rgb(255,255,255)"
+            : `rgb(${(frame * 37) % 200},${Math.floor(frame / 200) * 20},40)`;
+        },
+      };
+    </script>
+  </body>
+</html>
