@@ -33,6 +33,7 @@ const main = async (): Promise<void> => {
     await runtime.followBackends();
     runtime.startAll();
     runtime.watchUpdates();
+    void runtime.checkUpdatesIfStale(30 * 60 * 1000);
     const page = new SettingsPage(runtime);
 
     installShortcut(runtime, page);

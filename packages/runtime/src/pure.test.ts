@@ -70,3 +70,32 @@ describe("currentThreadKey", () => {
     }
   });
 });
+import { offerState } from "./ui/offerState.ts";
+import type { InstalledPlugin, PluginOffer } from "@t3mode/shared/Plugins";
+
+describe("offerState", () => {
+  const source = { kind: "github", owner: "owner", repo: "repo" } as const;
+  const offer: Extract<PluginOffer, { kind: "ready" }> = {
+    kind: "ready",
+    source,
+    manifest: { id: "example", name: "Example", description: "", api: 1, version: "2.0.0" },
+  };
+  const installed = (version: string): InstalledPlugin => ({ ...offer.manifest, source, version });
+
+  it("derives new, installed, update and older actions from the installed version", () => {
+    expect(offerState(offer, undefined)).toEqual({ kind: "new" });
+    expect(offerState(offer, installed("2.0.0"))).toEqual({ kind: "installed" });
+    expect(offerState(offer, installed("1.0.0"))).toEqual({ kind: "update", from: "1.0.0" });
+    expect(offerState(offer, installed("3.0.0"))).toEqual({ kind: "older", installed: "3.0.0" });
+  });
+
+  it("compares prereleases and includes broken installations", () => {
+    expect(offerState(offer, installed("2.0.0-beta.1"))).toEqual({
+      kind: "update",
+      from: "2.0.0-beta.1",
+    });
+    expect(offerState(offer, { ...installed("2.0.0"), error: "Missing file" })).toEqual({
+      kind: "installed",
+    });
+  });
+});

@@ -107,6 +107,8 @@ export class Runtime {
   readonly #backendListeners = new Map<string, Set<BackendListener>>();
   #settings: Settings;
   #update: UpdateStatus | undefined;
+  #pluginsCheckedAt: number | undefined;
+  #pluginsCheck: Promise<PluginResult<ReadonlyArray<InstalledPlugin>>> | undefined;
   readonly info: Info;
 
   constructor(
@@ -322,8 +324,29 @@ export class Runtime {
     return result;
   }
 
-  async checkUpdates(): Promise<PluginResult<ReadonlyArray<InstalledPlugin>>> {
+  checkUpdates(): Promise<PluginResult<ReadonlyArray<InstalledPlugin>>> {
+    if (this.#pluginsCheck) return this.#pluginsCheck;
+    const check = this.#checkPluginUpdates();
+    this.#pluginsCheck = check;
+    void check.finally(() => {
+      this.#pluginsCheck = undefined;
+    });
+    return check;
+  }
+
+  async checkUpdatesIfStale(maxAgeMs: number): Promise<void> {
+    if (
+      this.#pluginsCheckedAt !== undefined &&
+      performance.now() - this.#pluginsCheckedAt < maxAgeMs
+    )
+      return;
+    const result = await this.checkUpdates();
+    if (!result.ok) this.log("warn", `Automatic plugin update check failed: ${result.error}`);
+  }
+
+  async #checkPluginUpdates(): Promise<PluginResult<ReadonlyArray<InstalledPlugin>>> {
     const result = await this.#ask("Check", () => this.#native.plugins.checkUpdates());
+    if (result.ok) this.#pluginsCheckedAt = performance.now();
     const listed = result.ok
       ? result.value
       : await this.#native.plugins.list().catch(() => this.plugins);
