@@ -58,6 +58,10 @@ export interface HomeLayout {
   readonly updateHelper: string;
   /** Runs one plugin's backend in a utility process. */
   readonly backendHost: string;
+  /** The desktop indicator window's page, script and preload. */
+  readonly indicatorHtml: string;
+  readonly indicatorJs: string;
+  readonly indicatorPreload: string;
   /** One log file per plugin backend, `<id>.log`. */
   readonly pluginLogs: string;
   /** Downloaded installers, one folder per version. */
@@ -107,6 +111,9 @@ export const homeLayout = (root: string): HomeLayout => {
     shimJs: NodePath.join(dist, "shim.cjs"),
     updateHelper: NodePath.join(dist, "update-helper.ps1"),
     backendHost: NodePath.join(dist, "backend-host.cjs"),
+    indicatorHtml: NodePath.join(dist, "indicator.html"),
+    indicatorJs: NodePath.join(dist, "indicator.js"),
+    indicatorPreload: NodePath.join(dist, "indicator-preload.cjs"),
     pluginLogs: NodePath.join(logs, "plugins"),
     updates: NodePath.join(root, "updates"),
     updateReady: NodePath.join(root, "updates", "ready.json"),

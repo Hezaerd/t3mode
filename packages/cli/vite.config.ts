@@ -31,7 +31,10 @@ const homeBundles = [
   "../runtime/dist/renderer.iife.js",
   "../shim/dist/index.cjs",
   "../main/assets/update-helper.ps1",
-  "../main/assets/backend-host.cjs",
+  "../main/dist/backend-host.cjs",
+  "../main/assets/indicator.html",
+  "../main/dist/indicator.iife.js",
+  "../main/dist/indicator-preload.cjs",
 ];
 
 export default defineConfig({

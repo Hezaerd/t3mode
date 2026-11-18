@@ -31,13 +31,68 @@ export type BackendEvent =
   | { readonly _tag: "message"; readonly plugin: string; readonly data: unknown }
   | { readonly _tag: "status"; readonly plugin: string; readonly status: BackendStatus | null };
 
+/** Physical desktop pixels. */
+export interface ScreenRect {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * Backend host → main, about the backend's desktop indicator. `id` names one handle, so replies
+ * meant for an earlier window never reach a later one. `n` numbers probes across handles.
+ */
+export type IndicatorRequest =
+  | {
+      readonly op: "show";
+      readonly id: number;
+      readonly label: string;
+      readonly detail: string | null;
+    }
+  | { readonly op: "detail"; readonly id: number; readonly detail: string | null }
+  /** Prove the window is painted now. Main answers only while it is shown. */
+  | { readonly op: "probe"; readonly id: number; readonly n: number }
+  | { readonly op: "close"; readonly id: number };
+
+/** Main → backend host. */
+export type IndicatorReply =
+  /** The window answered probe `n` after painting, and sits at `rect`. */
+  | { readonly op: "painted"; readonly id: number; readonly n: number; readonly rect: ScreenRect }
+  /** The user pressed Stop, or the window is gone. */
+  | { readonly op: "ended"; readonly id: number; readonly reason: "stop" | "unavailable" };
+
+/** The longest label or detail line the indicator shows. */
+export const INDICATOR_TEXT_MAX = 160;
+
+export const clipIndicatorText = (text: string): string =>
+  text.length <= INDICATOR_TEXT_MAX ? text : `${text.slice(0, INDICATOR_TEXT_MAX - 1)}…`;
+
 /** Main → backend host, over the utility process's parentPort. */
-export type ToBackendHost = { readonly _tag: "message"; readonly data: unknown };
+export type ToBackendHost =
+  | { readonly _tag: "message"; readonly data: unknown }
+  | { readonly _tag: "indicator"; readonly reply: IndicatorReply };
 
 /** Backend host → main. */
 export type FromBackendHost =
   /** The plugin's `start` returned. */
-  { readonly _tag: "ready" } | { readonly _tag: "message"; readonly data: unknown };
+  | { readonly _tag: "ready" }
+  | { readonly _tag: "message"; readonly data: unknown }
+  | { readonly _tag: "indicator"; readonly request: IndicatorRequest };
+
+/** Main → the indicator window, and back, over its own preload. `epoch` names one window. */
+export type ToIndicator =
+  | {
+      readonly op: "render";
+      readonly epoch: string;
+      readonly label: string;
+      readonly detail: string | null;
+    }
+  | { readonly op: "probe"; readonly epoch: string; readonly n: number };
+
+export type FromIndicator =
+  | { readonly op: "painted"; readonly epoch: string; readonly n: number }
+  | { readonly op: "stop"; readonly epoch: string };
 
 /** Environment variables main gives the backend host. */
 export const BackendEnv = {

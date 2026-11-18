@@ -17,6 +17,7 @@ import {
   type BackendEvent,
   type BackendStatus,
   type FromBackendHost,
+  type IndicatorReply,
   type ToBackendHost,
   backendRetryDelay,
 } from "@t3mode/shared/Backends";
@@ -54,6 +55,21 @@ export interface BackendPage {
   readonly send: (channel: string, event: BackendEvent) => void;
 }
 
+/** One backend process, as its desktop indicator sees it. */
+export interface BackendOwner {
+  readonly plugin: string;
+  /** Dropped once this process is no longer the plugin's running backend. */
+  readonly reply: (reply: IndicatorReply) => void;
+}
+
+/** The desktop indicators (DesktopIndicator.ts). The supervisor names the owner of each request. */
+export interface IndicatorHooks {
+  /** An unvalidated request from the owner's backend host. */
+  readonly request: (owner: BackendOwner, request: unknown) => void;
+  /** Destroys the owner's window. Called before a backend is asked to exit, and when it exits. */
+  readonly dispose: (owner: BackendOwner) => void;
+}
+
 export interface SupervisorOptions {
   /** Starts the backend's process. A throw counts as a crash. */
   readonly spawn: (wanted: WantedBackend) => BackendProcess;
@@ -62,6 +78,7 @@ export interface SupervisorOptions {
   readonly isReady: () => boolean;
   /** How long `hold` waits for a backend to exit. */
   readonly exitTimeoutMs?: number;
+  readonly indicator: IndicatorHooks;
 }
 
 export interface Supervisor {
@@ -95,6 +112,7 @@ export const BACKEND_EXIT_TIMEOUT_MS = 5_000;
 /** A backend process the supervisor started, and what it runs. */
 interface Running {
   readonly child: BackendProcess;
+  readonly owner: BackendOwner;
   readonly runs: WantedBackend;
   /** The plugin's `start` returned. */
   ready: boolean;
@@ -150,11 +168,6 @@ const statusOf = (slot: Slot): BackendStatus | null => {
   return null;
 };
 
-const kill = (running: Running) => {
-  running.stopping = true;
-  running.child.kill();
-};
-
 const sameBackend = (a: WantedBackend, b: WantedBackend) =>
   a.script === b.script && a.folder === b.folder && a.version === b.version;
 
@@ -184,6 +197,12 @@ export const makeSupervisor = Effect.fnUntraced(function* (options: SupervisorOp
       slots.set(id, slot);
     }
     return slot;
+  };
+
+  const kill = (running: Running) => {
+    running.stopping = true;
+    options.indicator.dispose(running.owner);
+    running.child.kill();
   };
 
   const broadcast = (event: BackendEvent) => {
@@ -221,6 +240,15 @@ export const makeSupervisor = Effect.fnUntraced(function* (options: SupervisorOp
     const exited = Promise.withResolvers<void>();
     const running: Running = {
       child,
+      owner: {
+        plugin: slot.id,
+        reply: (reply) => {
+          if (slot.running !== running || running.stopping) return;
+          // The child's own port, not a window: there is no origin to name.
+          // eslint-disable-next-line unicorn/require-post-message-target-origin
+          child.postMessage({ _tag: "indicator", reply });
+        },
+      },
       runs: wanted,
       ready: false,
       stopping: false,
@@ -260,6 +288,8 @@ export const makeSupervisor = Effect.fnUntraced(function* (options: SupervisorOp
         emit(slot);
       } else if (message._tag === "message") {
         broadcast({ _tag: "message", plugin: slot.id, data: message.data });
+      } else if (message._tag === "indicator" && !running.stopping) {
+        options.indicator.request(running.owner, message.request);
       }
     });
     child.onExit((code) => {
@@ -268,6 +298,7 @@ export const makeSupervisor = Effect.fnUntraced(function* (options: SupervisorOp
       log.flush();
       closeOne();
       exited.resolve();
+      options.indicator.dispose(running.owner);
       if (slot.running !== running) return;
       slot.running = undefined;
       if (!running.stopping && !quitting) {

@@ -49,6 +49,10 @@ export const Channel = {
   backend: "t3mode:backend",
   /** Main → page: a BackendEvent, sent to pages that subscribed. */
   backendEvent: "t3mode:backend-event",
+  /** Main → indicator window: a ToIndicator. Never sent to or accepted from T3 Code's page. */
+  toIndicator: "t3mode:to-indicator",
+  /** Indicator window → main: a FromIndicator. */
+  fromIndicator: "t3mode:from-indicator",
 } as const;
 
 export const RENDERER_SCRIPT_NAME = "t3mode-renderer.js";

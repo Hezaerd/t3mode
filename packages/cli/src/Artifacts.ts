@@ -48,7 +48,10 @@ const HOME_BUNDLES: ReadonlyArray<Bundle> = [
   { pkg: "cli", file: "dist/repair.cjs", name: "repair.cjs" },
   SHIM,
   { pkg: "main", file: "assets/update-helper.ps1", name: "update-helper.ps1" },
-  { pkg: "main", file: "assets/backend-host.cjs", name: "backend-host.cjs" },
+  { pkg: "main", file: "dist/backend-host.cjs", name: "backend-host.cjs" },
+  { pkg: "main", file: "assets/indicator.html", name: "indicator.html" },
+  { pkg: "main", file: "dist/indicator.iife.js", name: "indicator.js" },
+  { pkg: "main", file: "dist/indicator-preload.cjs", name: "indicator-preload.cjs" },
 ];
 
 /** Where a bundle is. The published CLI keeps its own bundles next to it, the rest in bundles/. */
